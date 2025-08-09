@@ -20,6 +20,9 @@ from pydantic import BaseModel, Field
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse
+
 # Load environment variables
 load_dotenv()
 
@@ -1137,17 +1140,60 @@ async def ai_conversation_analyzer(
    except Exception as e:
        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Conversation analysis failed: {str(e)}"))
 
-# Run the server
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    """Health check endpoint for load balancers and monitoring"""
+    return JSONResponse({
+        "status": "healthy",
+        "service": "JobKranti MCP Server",
+        "version": "1.0.0",
+        "port": 8086,
+        "tools_available": 7,
+        "ai_enabled": bool(OPENAI_API_KEY)
+    })
+
+@mcp.custom_route("/", methods=["GET"])
+async def root_endpoint(request: Request) -> JSONResponse:
+    """Root endpoint with server information"""
+    return JSONResponse({
+        "service": "JobKranti AI - Intelligent Job Platform for Bharat",
+        "status": "running",
+        "mcp_endpoint": "/mcp",  # Updated from /sse to /mcp
+        "health_endpoint": "/health",
+        "auth_required": True,
+        "transport": "streamable-http",
+        "tools": [
+            "validate",
+            "create_user_profile", 
+            "intelligent_job_search",
+            "post_job_intelligently",
+            "generate_smart_resume",
+            "ai_job_safety_analysis",
+            "ai_conversation_analyzer"
+        ]
+    })
+
+@mcp.custom_route("/info", methods=["GET"])
+async def info_endpoint(request: Request) -> PlainTextResponse:
+    """Simple text endpoint for basic checks"""
+    return PlainTextResponse("JobKranti MCP Server is running! Ready for PuchAI connection.")
+
 async def main():
-   print("🚀 Starting JobKranti AI-Powered MCP server on http://0.0.0.0:8086")
-   print("🤖 AI Agent initialized with intelligent conversation analysis")
-   print("🔗 Connect from PuchAI using your auth token")
-   print("📱 Demo data loaded with sample job postings")
-   if OPENAI_API_KEY:
-       print("✅ OpenAI API connected - Advanced AI features enabled")
-   else:
-       print("⚠️  OpenAI API not configured - Using fallback rule-based processing")
-   await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
+    print("🚀 Starting JobKranti AI-Powered MCP server on http://0.0.0.0:8086")
+    print("🤖 AI Agent initialized with intelligent conversation analysis")
+    print("🔗 Connect from PuchAI using your auth token")
+    print("📱 Demo data loaded with sample job postings")
+    print("🌐 Custom routes available: /health, /, /info")
+    print("🔗 MCP endpoint available at: /mcp")  # Updated info
+    
+    if OPENAI_API_KEY:
+        print("✅ OpenAI API connected - Advanced AI features enabled")
+    else:
+        print("⚠️  OpenAI API not configured - Using fallback rule-based processing")
+    
+    # Use the correct transport with default path
+    await mcp.run_async(transport="http", host="0.0.0.0", port=8086)
+    # This automatically creates the /mcp endpoint
 
 if __name__ == "__main__":
-   asyncio.run(main())
+    asyncio.run(main())

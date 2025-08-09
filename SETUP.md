@@ -1,6 +1,4 @@
 
-Great question! Let's test this step by step. Here's your complete testing guide:
-
 ## 🧪 **Testing JobKranti MCP Server**
 
 ### **Step 1: Local Setup & Testing**
