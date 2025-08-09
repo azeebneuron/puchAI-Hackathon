@@ -2,12 +2,13 @@ import asyncio
 import json
 import os
 import re
-from typing import Annotated, Dict, List, Optional, Any
-from datetime import datetime
-from dataclasses import dataclass, asdict
-from uuid import uuid4
 import base64
 import io
+from typing import Annotated, Dict, List, Optional, Any, Union
+from datetime import datetime, timedelta
+from dataclasses import dataclass, asdict
+from uuid import uuid4
+from enum import Enum
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -18,8 +19,6 @@ from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field
 
 import httpx
-from PIL import Image, ImageDraw, ImageFont
-
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
@@ -32,8 +31,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
+assert OPENAI_API_KEY is not None, "Please set OPENAI_API_KEY in your .env file"
 
-# Auth Provider for PuchAI
+# Enhanced Auth Provider
 class SimpleBearerAuthProvider(BearerAuthProvider):
     def __init__(self, token: str):
         k = RSAKeyPair.generate()
@@ -44,71 +44,139 @@ class SimpleBearerAuthProvider(BearerAuthProvider):
         if token == self.token:
             return AccessToken(
                 token=token,
-                client_id="puch-client",
+                client_id="jobkranti-client",
                 scopes=["*"],
                 expires_at=None,
             )
         return None
 
-# Pydantic Models for Structured LLM Outputs
+# Enhanced Enums and Constants
+class JobUrgency(str, Enum):
+    IMMEDIATE = "immediate"
+    TODAY = "today"
+    WITHIN_WEEK = "within_week"
+    WITHIN_MONTH = "within_month"
+    FLEXIBLE = "flexible"
+
+class WorkType(str, Enum):
+    FULL_TIME = "full_time"
+    PART_TIME = "part_time"
+    GIG = "gig"
+    CONTRACT = "contract"
+    HOURLY = "hourly"
+    DAILY = "daily"
+
+class JobCategory(str, Enum):
+    SECURITY = "security"
+    DELIVERY = "delivery"
+    CLEANING = "cleaning"
+    COOKING = "cooking"
+    DRIVING = "driving"
+    CONSTRUCTION = "construction"
+    PLUMBING = "plumbing"
+    ELECTRICAL = "electrical"
+    RETAIL = "retail"
+    WAREHOUSE = "warehouse"
+    MANUFACTURING = "manufacturing"
+    GENERAL = "general"
+
+# Supported Indian Languages (OpenAI supports all these)
+SUPPORTED_LANGUAGES = {
+    "hi": "Hindi",
+    "en": "English", 
+    "ta": "Tamil",
+    "te": "Telugu",
+    "bn": "Bengali",
+    "mr": "Marathi",
+    "gu": "Gujarati",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "pa": "Punjabi",
+    "ur": "Urdu",
+    "or": "Odia",
+    "as": "Assamese"
+}
+
+# Enhanced Pydantic Models for Structured LLM Outputs
 class UserProfileSchema(BaseModel):
-    name: str = Field(description="Full name of the person")
-    location: str = Field(description="City or area where person lives")
-    skills: List[str] = Field(description="List of skills in English")
-    experience_years: int = Field(description="Years of work experience")
-    job_preferences: List[str] = Field(description="Preferred job types or categories")
-    availability: str = Field(description="Full-time, part-time, or flexible")
-    preferred_language: str = Field(description="Language code like 'hi', 'en', 'ta'")
+    name: str = Field(description="Full name extracted from conversation")
+    location: str = Field(description="City/area where person lives")
+    skills: List[str] = Field(description="Skills mentioned (auto-translated to English)")
+    experience_years: int = Field(description="Years of work experience mentioned")
+    job_preferences: List[str] = Field(description="Types of jobs person is interested in")
+    availability: str = Field(description="When person can work - timing/schedule")
+    preferred_language: str = Field(description="Primary language detected from conversation")
+    secondary_languages: List[str] = Field(default=[], description="Other languages person speaks")
+    contact_preference: str = Field(default="voice", description="Prefers voice calls or text")
+    salary_expectation_min: Optional[int] = Field(default=None, description="Minimum salary mentioned")
+    salary_expectation_max: Optional[int] = Field(default=None, description="Maximum salary mentioned")
+    education_level: str = Field(default="basic", description="Education level if mentioned")
+    has_vehicle: bool = Field(default=False, description="Owns bike/car for delivery jobs")
+    willing_to_relocate: bool = Field(default=False, description="Open to moving cities")
+    immediate_need: bool = Field(default=False, description="Urgently needs job for survival")
+    family_situation: str = Field(default="", description="Family context affecting job needs")
 
 class JobSearchCriteria(BaseModel):
     job_types: List[str] = Field(description="Types of jobs being searched for")
     location: str = Field(description="Preferred work location")
-    salary_min: Optional[int] = Field(description="Minimum salary expectation")
-    salary_max: Optional[int] = Field(description="Maximum salary expectation")
-    urgency: str = Field(description="immediate, within_week, flexible")
-    work_type: str = Field(description="full_time, part_time, gig, contract")
-    additional_requirements: List[str] = Field(description="Any special requirements")
+    radius_km: int = Field(default=10, description="How far willing to travel")
+    salary_min: Optional[int] = Field(description="Minimum salary needed")
+    salary_max: Optional[int] = Field(description="Maximum salary expected")
+    urgency: str = Field(description="How urgently job is needed")
+    work_type: str = Field(description="Type of employment preferred")
+    preferred_shift: List[str] = Field(default=[], description="Time preferences")
+    additional_requirements: List[str] = Field(description="Special needs or requirements")
+    survival_mode: bool = Field(default=False, description="Will take any available job")
+    language_detected: str = Field(description="Language user communicated in")
 
 class JobPostingSchema(BaseModel):
-    title: str = Field(description="Job title or position")
+    title: str = Field(description="Job title in English")
     description: str = Field(description="Detailed job description")
-    location: str = Field(description="Job location")
-    salary_min: int = Field(description="Minimum salary offered")
-    salary_max: int = Field(description="Maximum salary offered")
-    job_type: str = Field(description="full_time, part_time, gig, contract")
-    category: str = Field(description="Job category like security, cleaning, delivery")
-    requirements: List[str] = Field(description="Required skills or qualifications")
-    contact_info: str = Field(description="Phone number or contact details")
-    urgency: str = Field(description="immediate, within_week, flexible")
-    benefits: List[str] = Field(description="Any additional benefits offered")
+    location: str = Field(description="Specific job location")
+    salary_min: int = Field(description="Minimum salary offered per month")
+    salary_max: int = Field(description="Maximum salary offered per month")
+    job_type: str = Field(description="Employment type")
+    category: str = Field(description="Job category for matching")
+    requirements: List[str] = Field(description="Skills/qualifications needed")
+    contact_info: str = Field(description="How to contact employer")
+    urgency: str = Field(description="How quickly position needs to be filled")
+    benefits: List[str] = Field(description="Perks and benefits offered")
+    working_hours: str = Field(description="Shift timings")
+    original_language: str = Field(description="Language job was posted in")
 
-class SafetyAnalysis(BaseModel):
-    safety_level: str = Field(description="SAFE, MEDIUM_RISK, HIGH_RISK")
-    risk_score: int = Field(description="Risk score from 0-100")
-    scam_indicators: List[str] = Field(description="Specific red flags found")
-    legitimate_indicators: List[str] = Field(description="Positive signs found")
-    recommendation: str = Field(description="PROCEED, CAUTION, AVOID")
-    explanation: str = Field(description="Detailed explanation of the analysis")
+class ConversationalFollowUp(BaseModel):
+    follow_up_questions: List[str] = Field(description="Questions to ask for missing info")
+    missing_info: List[str] = Field(description="What information is still needed")
+    conversation_stage: str = Field(description="Where we are in the conversation flow")
+    next_action: str = Field(description="What should happen next")
+    response_in_user_language: str = Field(description="Response in user's preferred language")
 
-class SalaryInsights(BaseModel):
-    salary_range_min: int = Field(description="Minimum typical salary for this role")
-    salary_range_max: int = Field(description="Maximum typical salary for this role")
-    market_factors: List[str] = Field(description="Factors affecting salary in this market")
-    negotiation_tips: List[str] = Field(description="Tips for salary negotiation")
-    growth_potential: str = Field(description="Career growth potential")
-    demand_level: str = Field(description="HIGH, MEDIUM, LOW demand for this role")
+class JobMatchAnalysis(BaseModel):
+    match_score: int = Field(description="Relevance score 0-100")
+    match_reasons: List[str] = Field(description="Why this job matches")
+    concerns: List[str] = Field(description="Potential issues or mismatches")
+    recommendation: str = Field(description="Should apply, maybe, or skip")
 
-# Data Models
+# Enhanced Data Models
 @dataclass
 class UserProfile:
     id: str
     phone: str
     profile_data: UserProfileSchema
+    conversation_history: List[Dict] = None
+    voice_samples: List[str] = None
     created_at: datetime = None
+    last_active: datetime = None
     
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now()
+        if self.last_active is None:
+            self.last_active = datetime.now()
+        if self.conversation_history is None:
+            self.conversation_history = []
+        if self.voice_samples is None:
+            self.voice_samples = []
 
 @dataclass
 class JobPosting:
@@ -116,399 +184,407 @@ class JobPosting:
     posting_data: JobPostingSchema
     posted_by: str
     verified: bool = False
+    views: int = 0
+    applications: int = 0
     created_at: datetime = None
+    expires_at: datetime = None
     
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now()
+        if self.expires_at is None:
+            self.expires_at = datetime.now() + timedelta(days=30)
 
-# In-memory storage
+@dataclass
+class ConversationSession:
+    user_id: str
+    session_id: str
+    messages: List[Dict]
+    current_intent: str
+    language: str
+    last_interaction: datetime
+    
+    def __post_init__(self):
+        if self.last_interaction is None:
+            self.last_interaction = datetime.now()
+
+# In-memory storage (In production, use proper database)
 USERS: Dict[str, UserProfile] = {}
 JOBS: Dict[str, JobPosting] = {}
+CONVERSATIONS: Dict[str, ConversationSession] = {}
 APPLICATIONS: Dict[str, Dict] = {}
 
-# AI Agent for intelligent processing
-class JobKrantiAI:
-    def __init__(self, api_key: Optional[str] = None):
+# Advanced AI Agent with Voice and Multilingual Support
+class JobKrantiAdvancedAI:
+    def __init__(self, api_key: str):
         self.api_key = api_key
         self.client = None
         if api_key:
-            # Initialize OpenAI client when available
             try:
                 import openai
                 self.client = openai.OpenAI(api_key=api_key)
             except ImportError:
-                print("⚠️  OpenAI not available - using fallback processing")
+                print("⚠️ OpenAI not available")
     
-    async def analyze_user_conversation(self, conversation_text: str, phone: str) -> UserProfileSchema:
-        """Analyze conversation to extract user profile information"""
-        if self.client:
-            return await self._openai_analyze_profile(conversation_text)
-        else:
-            return await self._fallback_analyze_profile(conversation_text)
-    
-    async def analyze_job_search_query(self, query: str, user_profile: Optional[UserProfileSchema] = None) -> JobSearchCriteria:
-        """Analyze natural language job search query"""
-        if self.client:
-            return await self._openai_analyze_search(query, user_profile)
-        else:
-            return await self._fallback_analyze_search(query)
-    
-    async def analyze_job_posting(self, posting_text: str) -> JobPostingSchema:
-        """Analyze natural language job posting"""
-        if self.client:
-            return await self._openai_analyze_posting(posting_text)
-        else:
-            return await self._fallback_analyze_posting(posting_text)
-    
-    async def analyze_job_safety(self, job_description: str, salary: int, company: str) -> SafetyAnalysis:
-        """Analyze job posting for safety and scam detection"""
-        if self.client:
-            return await self._openai_safety_analysis(job_description, salary, company)
-        else:
-            return await self._fallback_safety_analysis(job_description, salary, company)
-    
-    async def get_salary_insights(self, job_category: str, location: str, experience: str) -> SalaryInsights:
-        """Get comprehensive salary insights"""
-        if self.client:
-            return await self._openai_salary_insights(job_category, location, experience)
-        else:
-            return await self._fallback_salary_insights(job_category, location, experience)
-    
-    # OpenAI-powered implementations
-    async def _openai_analyze_profile(self, conversation: str) -> UserProfileSchema:
-        """Use OpenAI to analyze user profile from conversation"""
+    async def transcribe_voice_message(self, audio_data: bytes, language_hint: str = "hi") -> str:
+        """Convert voice message to text using OpenAI Whisper"""
+        if not self.client:
+            return "Voice transcription not available - OpenAI not configured"
+        
         try:
-            completion = self.client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
+            # Create a temporary file-like object
+            audio_file = io.BytesIO(audio_data)
+            audio_file.name = "voice_message.mp3"
+            
+            # Use Whisper for transcription
+            transcript = self.client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language=language_hint if language_hint != "auto" else None,
+                response_format="text"
+            )
+            
+            return transcript
+            
+        except Exception as e:
+            print(f"Voice transcription error: {e}")
+            return f"Sorry, couldn't understand the voice message. Error: {str(e)}"
+    
+    async def generate_voice_response(self, text: str, language: str = "hi") -> bytes:
+        """Convert text to speech using OpenAI TTS"""
+        if not self.client:
+            return b""
+        
+        try:
+            # Choose voice based on language
+            voice_map = {
+                "hi": "alloy",  # Good for Hindi
+                "en": "nova",   # Clear English
+                "ta": "echo",   # Works well for Tamil
+                "te": "fable",  # Good for Telugu
+                "bn": "onyx",   # Bengali
+                "mr": "shimmer" # Marathi
+            }
+            
+            voice = voice_map.get(language, "alloy")
+            
+            response = self.client.audio.speech.create(
+                model="tts-1",
+                voice=voice,
+                input=text
+            )
+            
+            return response.content
+            
+        except Exception as e:
+            print(f"Voice generation error: {e}")
+            return b""
+    
+    async def detect_language_and_intent(self, text: str) -> Dict[str, Any]:
+        """Detect language and conversation intent"""
+        if not self.client:
+            return {"language": "hi", "intent": "general", "confidence": 0.5}
+        
+        try:
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
-                        "content": """You are an expert at analyzing conversations to extract job seeker profiles. 
-                        Extract user information from the conversation, handling multiple languages (Hindi, English, regional languages).
-                        Be smart about inferring skills, experience, and preferences from natural conversation.
-                        Convert local language skills to English equivalents."""
+                        "content": """You are an expert in Indian languages and job-related conversations. 
+                        Analyze the text and return JSON with:
+                        - language: detected language code (hi, en, ta, te, bn, mr, gu, kn, ml, pa, ur)
+                        - intent: what user wants (profile_creation, job_search, job_posting, question, general)
+                        - confidence: 0-1 confidence score
+                        - key_info: important details extracted"""
                     },
                     {
-                        "role": "user",
-                        "content": f"Analyze this conversation and extract user profile: {conversation}"
+                        "role": "user", 
+                        "content": f"Analyze this text: {text}"
                     }
+                ],
+                response_format={"type": "json_object"}
+            )
+            
+            return json.loads(completion.choices[0].message.content)
+            
+        except Exception as e:
+            print(f"Language detection error: {e}")
+            return {"language": "hi", "intent": "general", "confidence": 0.5}
+    
+    async def generate_conversational_response(self, user_input: str, conversation_history: List[Dict], intent: str, language: str) -> ConversationalFollowUp:
+        """Generate intelligent conversational responses with follow-ups"""
+        if not self.client:
+            return self._fallback_conversation_response(user_input, language)
+        
+        try:
+            # Build context from conversation history
+            context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation_history[-5:]])
+            
+            system_prompt = f"""You are JobKranti AI, helping people in India find jobs and employers find workers. 
+            
+            Current conversation intent: {intent}
+            User's language: {SUPPORTED_LANGUAGES.get(language, language)}
+            
+            Guidelines:
+            1. Be conversational, friendly, and empathetic
+            2. Ask relevant follow-up questions to gather missing info
+            3. Handle code-mixing (Hindi-English, Tamil-English etc.)
+            4. Understand survival needs - some people need ANY job immediately
+            5. Be sensitive to economic pressures and family situations
+            6. Guide conversation toward actionable outcomes
+            7. Respond primarily in the user's detected language
+            
+            For job seekers: gather name, location, skills, experience, availability, salary needs
+            For employers: gather job details, location, salary, requirements, urgency
+            
+            Always be practical and helpful. Understand that many users are not tech-savvy."""
+            
+            completion = self.client.beta.chat.completions.parse(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Previous conversation:\n{context}\n\nUser's new message: {user_input}"}
+                ],
+                response_format=ConversationalFollowUp
+            )
+            
+            return completion.choices[0].message.parsed
+            
+        except Exception as e:
+            print(f"Conversational AI error: {e}")
+            return self._fallback_conversation_response(user_input, language)
+    
+    async def intelligent_profile_extraction(self, conversation_text: str, language: str) -> UserProfileSchema:
+        """Extract comprehensive user profile from natural conversation"""
+        if not self.client:
+            return await self._fallback_analyze_profile(conversation_text, language)
+        
+        try:
+            system_prompt = f"""Extract user profile information from this conversation in {SUPPORTED_LANGUAGES.get(language, language)}.
+            
+            Handle these scenarios intelligently:
+            - Code-mixed conversations (Hindi-English, Tamil-English, etc.)
+            - Colloquial terms and local expressions
+            - Implied information (e.g., "need job fast" = immediate_need = true)
+            - Family situations affecting job needs
+            - Skills mentioned in local languages (convert to English)
+            - Location nicknames (e.g., "Gurgaon" = "Gurugram")
+            
+            Be smart about inferring missing information from context."""
+            
+            completion = self.client.beta.chat.completions.parse(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Extract profile from: {conversation_text}"}
                 ],
                 response_format=UserProfileSchema
             )
-            return completion.choices[0].message.parsed
-        except Exception as e:
-            print(f"OpenAI error: {e}")
-            return await self._fallback_analyze_profile(conversation)
-    
-    async def _openai_analyze_search(self, query: str, user_profile: Optional[UserProfileSchema]) -> JobSearchCriteria:
-        """Use OpenAI to analyze job search query"""
-        try:
-            context = f"User profile: {user_profile.model_dump_json()}" if user_profile else "No user profile available"
             
-            completion = self.client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert at understanding job search queries in multiple languages.
-                        Extract search criteria from natural language, considering the user's profile if available.
-                        Handle Hindi, English, and regional languages. Be smart about inferring intent."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Analyze this job search query: '{query}'\n\nContext: {context}"
-                    }
-                ],
-                response_format=JobSearchCriteria
-            )
             return completion.choices[0].message.parsed
+            
         except Exception as e:
-            print(f"OpenAI error: {e}")
-            return await self._fallback_analyze_search(query)
+            print(f"Profile extraction error: {e}")
+            return await self._fallback_analyze_profile(conversation_text, language)
     
-    async def _openai_analyze_posting(self, posting_text: str) -> JobPostingSchema:
-        """Use OpenAI to analyze job posting"""
-        try:
-            completion = self.client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert at analyzing job postings in multiple languages.
-                        Extract structured information from natural language job postings.
-                        Handle Hindi, English, and mixed language content. Infer missing information intelligently."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Analyze this job posting: {posting_text}"
-                    }
-                ],
-                response_format=JobPostingSchema
-            )
-            return completion.choices[0].message.parsed
-        except Exception as e:
-            print(f"OpenAI error: {e}")
-            return await self._fallback_analyze_posting(posting_text)
+    async def intelligent_job_matching(self, user_profile: UserProfileSchema, available_jobs: List[JobPosting]) -> List[tuple]:
+        """Advanced job matching with AI scoring"""
+        if not self.client:
+            return await self._fallback_job_matching(user_profile, available_jobs)
+        
+        scored_jobs = []
+        
+        for job in available_jobs:
+            try:
+                analysis_prompt = f"""Analyze job match between:
+                
+                User Profile:
+                - Skills: {user_profile.skills}
+                - Experience: {user_profile.experience_years} years
+                - Location: {user_profile.location}
+                - Salary expectation: ₹{user_profile.salary_expectation_min}-{user_profile.salary_expectation_max}
+                - Availability: {user_profile.availability}
+                - Immediate need: {user_profile.immediate_need}
+                - Languages: {user_profile.preferred_language}, {user_profile.secondary_languages}
+                
+                Job Posting:
+                - Title: {job.posting_data.title}
+                - Location: {job.posting_data.location}
+                - Salary: ₹{job.posting_data.salary_min}-{job.posting_data.salary_max}
+                - Requirements: {job.posting_data.requirements}
+                - Category: {job.posting_data.category}
+                - Urgency: {job.posting_data.urgency}
+                
+                Consider location proximity, skill match, salary fit, and urgency alignment."""
+                
+                completion = self.client.beta.chat.completions.parse(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are an expert job matcher for blue-collar workers in India."},
+                        {"role": "user", "content": analysis_prompt}
+                    ],
+                    response_format=JobMatchAnalysis
+                )
+                
+                analysis = completion.choices[0].message.parsed
+                scored_jobs.append((job, analysis.match_score, analysis))
+                
+            except Exception as e:
+                print(f"Job matching error for {job.id}: {e}")
+                # Fallback to basic scoring
+                basic_score = await self._calculate_basic_match_score(user_profile, job)
+                scored_jobs.append((job, basic_score, None))
+        
+        # Sort by score descending
+        scored_jobs.sort(key=lambda x: x[1], reverse=True)
+        return scored_jobs
     
-    async def _openai_safety_analysis(self, description: str, salary: int, company: str) -> SafetyAnalysis:
-        """Use OpenAI for comprehensive safety analysis"""
-        try:
-            completion = self.client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert at detecting job scams and analyzing safety risks.
-                        Look for red flags like advance payments, unrealistic salaries, vague descriptions, etc.
-                        Also identify legitimate indicators. Provide detailed analysis."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Analyze this job for safety:\nDescription: {description}\nSalary: ₹{salary}\nCompany: {company}"
-                    }
-                ],
-                response_format=SafetyAnalysis
-            )
-            return completion.choices[0].message.parsed
-        except Exception as e:
-            print(f"OpenAI error: {e}")
-            return await self._fallback_safety_analysis(description, salary, company)
-    
-    async def _openai_salary_insights(self, job_category: str, location: str, experience: str) -> SalaryInsights:
-        """Use OpenAI for salary insights"""
-        try:
-            completion = self.client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert on Indian job market salary trends.
-                        Provide realistic salary ranges and market insights for blue-collar jobs in India.
-                        Consider location, experience, and current market conditions."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Provide salary insights for: {job_category} in {location} with {experience} experience level"
-                    }
-                ],
-                response_format=SalaryInsights
-            )
-            return completion.choices[0].message.parsed
-        except Exception as e:
-            print(f"OpenAI error: {e}")
-            return await self._fallback_salary_insights(job_category, location, experience)
-    
-    # Fallback implementations (rule-based)
-    async def _fallback_analyze_profile(self, conversation: str) -> UserProfileSchema:
-        """Fallback profile analysis using rules"""
-        # Extract name
-        name_patterns = [r"my name is (\w+)", r"i am (\w+)", r"main (\w+) hun"]
-        name = "User"
-        for pattern in name_patterns:
-            match = re.search(pattern, conversation.lower())
-            if match:
-                name = match.group(1).title()
+    async def _calculate_basic_match_score(self, profile: UserProfileSchema, job: JobPosting) -> int:
+        """Fallback basic scoring algorithm"""
+        score = 0
+        
+        # Location match (40 points)
+        if profile.location.lower() in job.posting_data.location.lower():
+            score += 40
+        
+        # Skills match (30 points)
+        for skill in profile.skills:
+            if skill.lower() in job.posting_data.description.lower():
+                score += 15
                 break
         
-        # Extract location
-        location_patterns = [r"from (\w+)", r"live in (\w+)", r"(\w+) mein rehta"]
-        location = "Not specified"
-        for pattern in location_patterns:
-            match = re.search(pattern, conversation.lower())
-            if match:
-                location = match.group(1).title()
-                break
+        # Salary compatibility (20 points)
+        if profile.salary_expectation_min and job.posting_data.salary_max >= profile.salary_expectation_min:
+            score += 20
         
-        # Extract skills
-        skill_keywords = ["security", "guard", "driver", "cook", "clean", "delivery", "plumber", "electrician"]
-        skills = [skill for skill in skill_keywords if skill in conversation.lower()]
+        # Urgency match (10 points)
+        if profile.immediate_need and job.posting_data.urgency in ["immediate", "today"]:
+            score += 10
         
-        # Extract experience
-        exp_match = re.search(r"(\d+)\s*(?:year|saal)", conversation.lower())
-        experience_years = int(exp_match.group(1)) if exp_match else 0
+        return min(score, 100)
+    
+    # Fallback methods for when OpenAI is not available
+    async def _fallback_conversation_response(self, user_input: str, language: str) -> ConversationalFollowUp:
+        """Basic rule-based conversation handling"""
+        return ConversationalFollowUp(
+            follow_up_questions=["Could you tell me more about your experience?"],
+            missing_info=["experience", "location", "skills"],
+            conversation_stage="information_gathering",
+            next_action="ask_follow_up",
+            response_in_user_language="Please tell me about your work experience."
+        )
+    
+    async def _fallback_analyze_profile(self, conversation: str, language: str) -> UserProfileSchema:
+        """Basic profile extraction without AI"""
+        # Simple regex-based extraction
+        name_match = re.search(r"(?:name|naam|नाम).{0,5}(\w+)", conversation.lower())
+        name = name_match.group(1).title() if name_match else "User"
+        
+        location_match = re.search(r"(?:from|live|रहता|रहती).{0,10}(\w+)", conversation.lower())
+        location = location_match.group(1).title() if location_match else "Not specified"
         
         return UserProfileSchema(
             name=name,
             location=location,
-            skills=skills or ["general"],
-            experience_years=experience_years,
-            job_preferences=skills or ["general"],
-            availability="flexible",
-            preferred_language="hi"
+            skills=["General"],
+            experience_years=0,
+            job_preferences=["Any"],
+            availability="Flexible",
+            preferred_language=language
         )
     
-    async def _fallback_analyze_search(self, query: str) -> JobSearchCriteria:
-        """Fallback search analysis"""
-        job_types = []
-        location = "Any location"
-        urgency = "flexible"
+    async def _fallback_job_matching(self, profile: UserProfileSchema, jobs: List[JobPosting]) -> List[tuple]:
+        """Basic job matching without AI"""
+        scored_jobs = []
+        for job in jobs:
+            score = await self._calculate_basic_match_score(profile, job)
+            scored_jobs.append((job, score, None))
         
-        # Simple keyword matching
-        if any(word in query.lower() for word in ["security", "guard"]):
-            job_types.append("security")
-        if any(word in query.lower() for word in ["delivery", "courier"]):
-            job_types.append("delivery")
-        if any(word in query.lower() for word in ["clean", "maid"]):
-            job_types.append("cleaning")
-        
-        # Extract location
-        location_match = re.search(r"in (\w+)", query.lower())
-        if location_match:
-            location = location_match.group(1).title()
-        
-        # Check urgency
-        if any(word in query.lower() for word in ["urgent", "immediately", "asap"]):
-            urgency = "immediate"
-        
-        return JobSearchCriteria(
-            job_types=job_types or ["general"],
-            location=location,
-            salary_min=None,
-            salary_max=None,
-            urgency=urgency,
-            work_type="full_time",
-            additional_requirements=[]
-        )
-    
-    async def _fallback_analyze_posting(self, posting_text: str) -> JobPostingSchema:
-        """Fallback posting analysis"""
-        # Extract salary
-        salary_match = re.search(r"₹\s*(\d+(?:,\d+)*)", posting_text)
-        salary = int(salary_match.group(1).replace(',', '')) if salary_match else 15000
-        
-        # Extract phone
-        phone_match = re.search(r"(\d{10})", posting_text)
-        contact = phone_match.group(1) if phone_match else "Contact not provided"
-        
-        # Determine category
-        category = "general"
-        if any(word in posting_text.lower() for word in ["security", "guard"]):
-            category = "security"
-        elif any(word in posting_text.lower() for word in ["delivery", "courier"]):
-            category = "delivery"
-        elif any(word in posting_text.lower() for word in ["clean", "maid"]):
-            category = "cleaning"
-        
-        return JobPostingSchema(
-            title=f"{category.title()} Position",
-            description=posting_text,
-            location="Location not specified",
-            salary_min=salary,
-            salary_max=salary,
-            job_type="full_time",
-            category=category,
-            requirements=["Experience preferred"],
-            contact_info=contact,
-            urgency="flexible",
-            benefits=[]
-        )
-    
-    async def _fallback_safety_analysis(self, description: str, salary: int, company: str) -> SafetyAnalysis:
-        """Fallback safety analysis"""
-        risk_score = 0
-        scam_indicators = []
-        legitimate_indicators = []
-        
-        # Check for scam patterns
-        scam_patterns = [
-            r"(?i)pay.*registration.*fee",
-            r"(?i)advance.*payment",
-            r"(?i)easy.*money",
-            r"(?i)guaranteed.*income"
-        ]
-        
-        for pattern in scam_patterns:
-            if re.search(pattern, description):
-                risk_score += 30
-                scam_indicators.append("Contains payment request")
-        
-        # Check for legitimate indicators
-        if re.search(r"\d{10}", description):  # Has phone number
-            legitimate_indicators.append("Valid contact number provided")
-        
-        if salary > 0 and salary < 100000:  # Reasonable salary
-            legitimate_indicators.append("Realistic salary range")
-        elif salary > 100000:
-            risk_score += 25
-            scam_indicators.append("Unrealistic high salary")
-        
-        safety_level = "HIGH_RISK" if risk_score >= 50 else "MEDIUM_RISK" if risk_score >= 25 else "SAFE"
-        recommendation = "AVOID" if risk_score >= 50 else "CAUTION" if risk_score >= 25 else "PROCEED"
-        
-        return SafetyAnalysis(
-            safety_level=safety_level,
-            risk_score=risk_score,
-            scam_indicators=scam_indicators,
-            legitimate_indicators=legitimate_indicators,
-            recommendation=recommendation,
-            explanation=f"Analysis based on {len(scam_indicators)} risk factors and {len(legitimate_indicators)} positive indicators"
-        )
-    
-    async def _fallback_salary_insights(self, job_category: str, location: str, experience: str) -> SalaryInsights:
-        """Fallback salary insights"""
-        # Basic salary data
-        base_salaries = {
-            "security": (12000, 25000),
-            "delivery": (15000, 30000),
-            "cleaning": (8000, 18000),
-            "cooking": (10000, 20000),
-            "general": (10000, 20000)
-        }
-        
-        min_sal, max_sal = base_salaries.get(job_category.lower(), (10000, 20000))
-        
-        # Adjust for location
-        if location.lower() in ["mumbai", "delhi", "bangalore"]:
-            min_sal = int(min_sal * 1.3)
-            max_sal = int(max_sal * 1.3)
-        
-        # Adjust for experience
-        if experience == "experienced":
-            min_sal = int(min_sal * 1.2)
-            max_sal = int(max_sal * 1.2)
-        
-        return SalaryInsights(
-            salary_range_min=min_sal,
-            salary_range_max=max_sal,
-            market_factors=["Location", "Experience", "Demand"],
-            negotiation_tips=["Highlight experience", "Show reliability", "Consider benefits"],
-            growth_potential="Good with experience",
-            demand_level="MEDIUM"
-        )
+        scored_jobs.sort(key=lambda x: x[1], reverse=True)
+        return scored_jobs
 
 # Initialize AI agent
-ai_agent = JobKrantiAI(OPENAI_API_KEY)
+ai_agent = JobKrantiAdvancedAI(OPENAI_API_KEY)
 
-# Seed demo data
-def seed_demo_data():
-    """Add demo job postings"""
+# Seed demo data with more diverse jobs
+def seed_enhanced_demo_data():
+    """Add comprehensive demo job postings in multiple languages"""
     demo_postings = [
         JobPostingSchema(
-            title="Security Guard - Night Shift",
-            description="Experienced security guard needed for office complex in Gurgaon Sector 15. Night shift 10PM-6AM. Good salary and benefits.",
+            title="Security Guard - Delhi NCR",
+            description="रात की शिफ्ट के लिए सिक्यूरिटी गार्ड चाहिए। अच्छी तनख्वाह और सुविधाएं।",
             location="Gurgaon, Sector 15",
             salary_min=18000,
-            salary_max=20000,
+            salary_max=22000,
             job_type="full_time",
             category="security",
-            requirements=["2+ years experience", "Night shift availability"],
+            requirements=["2+ years experience", "Night shift availability", "Physical fitness"],
             contact_info="9876543210",
             urgency="within_week",
-            benefits=["PF", "ESI", "Overtime pay"]
+            benefits=["PF", "ESI", "Overtime pay", "Free meals"],
+            working_hours="10 PM - 6 AM",
+            original_language="hi"
         ),
         JobPostingSchema(
-            title="House Cleaning Service",
-            description="Need reliable domestic help for daily house cleaning in Dwarka. 2 hours daily morning shift.",
-            location="Delhi, Dwarka",
-            salary_min=8000,
-            salary_max=10000,
-            job_type="part_time",
-            category="cleaning",
-            requirements=["Reliability", "Local area"],
+            title="Delivery Partner - Zomato",
+            description="Food delivery के लिए partner चाहिए। Own bike required. Daily payment.",
+            location="Mumbai, Andheri",
+            salary_min=25000,
+            salary_max=35000,
+            job_type="gig",
+            category="delivery",
+            requirements=["Own bike", "Smartphone", "Driving license"],
             contact_info="9123456789",
             urgency="immediate",
-            benefits=["Flexible timing"]
+            benefits=["Fuel allowance", "Daily payment", "Flexible hours"],
+            working_hours="Flexible - 6 hours minimum",
+            original_language="hi"
+        ),
+        JobPostingSchema(
+            title="Maid for Household Work",
+            description="Need reliable maid for daily cleaning and cooking. Good family, respectful environment.",
+            location="Bangalore, Koramangala",
+            salary_min=12000,
+            salary_max=15000,
+            job_type="part_time",
+            category="cleaning",
+            requirements=["Cooking skills", "Cleaning experience", "Trustworthy"],
+            contact_info="9887766554",
+            urgency="immediate",
+            benefits=["Food provided", "Festival bonus", "Flexible timing"],
+            working_hours="8 AM - 2 PM",
+            original_language="en"
+        ),
+        JobPostingSchema(
+            title="Factory Worker - Manufacturing",
+            description="Production line worker needed. No experience required, training provided.",
+            location="Chennai, Sriperumbudur",
+            salary_min=16000,
+            salary_max=20000,
+            job_type="full_time",
+            category="manufacturing",
+            requirements=["Physical fitness", "Willingness to learn", "Day shift"],
+            contact_info="9556677889",
+            urgency="within_week",
+            benefits=["ESI", "PF", "Annual bonus", "Transport"],
+            working_hours="8 AM - 5 PM",
+            original_language="ta"
+        ),
+        JobPostingSchema(
+            title="Construction Helper",
+            description="निर्माण कार्य में सहायक चाहिए। दैनिक मजदूरी। काम तुरंत शुरू।",
+            location="Pune, Hinjawadi",
+            salary_min=500,
+            salary_max=700,
+            job_type="daily",
+            category="construction",
+            requirements=["Physical strength", "No experience needed"],
+            contact_info="9334455667",
+            urgency="immediate",
+            benefits=["Daily payment", "Overtime available"],
+            working_hours="7 AM - 5 PM",
+            original_language="hi"
         )
     ]
     
@@ -521,15 +597,15 @@ def seed_demo_data():
         )
         JOBS[job.id] = job
 
-seed_demo_data()
+seed_enhanced_demo_data()
 
 # Create FastMCP server
 mcp = FastMCP(
-    "JobKranti AI - Intelligent Job Platform for Bharat",
+    "JobKranti AI - Voice-First Multilingual Job Platform for Bharat",
     auth=SimpleBearerAuthProvider(TOKEN),
 )
 
-# MCP Tools
+# Enhanced MCP Tools
 
 @mcp.tool
 async def validate() -> str:
@@ -537,15 +613,111 @@ async def validate() -> str:
     return MY_NUMBER
 
 @mcp.tool
-async def create_user_profile(
-    conversation_text: Annotated[str, Field(description="Natural conversation about user's background, skills, and job preferences")],
-    phone: Annotated[str, Field(description="User's WhatsApp phone number")]
-) -> str:
-    """Create user profile by analyzing natural conversation using AI"""
+async def process_voice_message(
+    audio_data_base64: Annotated[str, Field(description="Base64 encoded audio data from WhatsApp voice message")],
+    user_phone: Annotated[str, Field(description="User's WhatsApp phone number")],
+    language_hint: Annotated[str, Field(description="Language hint if known (hi, en, ta, etc.)")] = "auto"
+) -> list[TextContent | ImageContent]:
+    """Process voice message from WhatsApp - transcribe, understand, and respond with voice"""
     
     try:
-        # Use AI to analyze the conversation
-        profile_data = await ai_agent.analyze_user_conversation(conversation_text, phone)
+        # Decode audio data
+        audio_bytes = base64.b64decode(audio_data_base64)
+        
+        # Transcribe voice to text
+        transcribed_text = await ai_agent.transcribe_voice_message(audio_bytes, language_hint)
+        
+        if not transcribed_text or "error" in transcribed_text.lower():
+            return [TextContent(
+                type="text",
+                text="❌ Sorry, I couldn't understand the voice message. Please try speaking clearly or send a text message."
+            )]
+        
+        # Detect language and intent
+        language_analysis = await ai_agent.detect_language_and_intent(transcribed_text)
+        detected_language = language_analysis.get("language", "hi")
+        intent = language_analysis.get("intent", "general")
+        
+        # Get or create conversation session
+        session_id = f"{user_phone}_{datetime.now().strftime('%Y%m%d')}"
+        if session_id not in CONVERSATIONS:
+            CONVERSATIONS[session_id] = ConversationSession(
+                user_id=user_phone,
+                session_id=session_id,
+                messages=[],
+                current_intent=intent,
+                language=detected_language
+            )
+        
+        session = CONVERSATIONS[session_id]
+        session.messages.append({"role": "user", "content": transcribed_text, "timestamp": datetime.now()})
+        session.last_interaction = datetime.now()
+        
+        # Generate conversational response
+        follow_up = await ai_agent.generate_conversational_response(
+            transcribed_text, 
+            session.messages, 
+            intent, 
+            detected_language
+        )
+        
+        # Add AI response to conversation
+        session.messages.append({
+            "role": "assistant", 
+            "content": follow_up.response_in_user_language,
+            "timestamp": datetime.now()
+        })
+        
+        # Generate voice response
+        voice_response_bytes = await ai_agent.generate_voice_response(
+            follow_up.response_in_user_language, 
+            detected_language
+        )
+        
+        result_text = f"🎤 **Voice Message Processed**\n\n"
+        result_text += f"🗣️ **You said** ({SUPPORTED_LANGUAGES.get(detected_language, detected_language)}): \"{transcribed_text}\"\n\n"
+        result_text += f"🤖 **AI Response**: {follow_up.response_in_user_language}\n\n"
+        result_text += f"🎯 **Intent Detected**: {intent}\n"
+        result_text += f"🌐 **Language**: {SUPPORTED_LANGUAGES.get(detected_language, detected_language)}\n"
+        
+        if follow_up.follow_up_questions:
+            result_text += f"\n❓ **Follow-up Questions**:\n"
+            for q in follow_up.follow_up_questions[:3]:
+                result_text += f"• {q}\n"
+        
+        if follow_up.missing_info:
+            result_text += f"\n📝 **Still Need**: {', '.join(follow_up.missing_info)}\n"
+        
+        result_text += f"\n💡 **Next Step**: {follow_up.next_action}\n"
+        result_text += f"🆔 **Session**: {session_id}"
+        
+        content_list = [TextContent(type="text", text=result_text)]
+        
+        # Add voice response if generated
+        if voice_response_bytes:
+            voice_base64 = base64.b64encode(voice_response_bytes).decode('utf-8')
+            content_list.append(ImageContent(
+                type="image",
+                mimeType="audio/mpeg",
+                data=voice_base64
+            ))
+        
+        return content_list
+        
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Voice processing failed: {str(e)}"))
+
+@mcp.tool
+async def create_profile_conversationally(
+    conversation_text: Annotated[str, Field(description="Natural conversation in any Indian language")],
+    phone: Annotated[str, Field(description="User's WhatsApp phone number")],
+    language: Annotated[str, Field(description="Primary language used in conversation")] = "hi"
+) -> str:
+    """Create user profile through intelligent conversation analysis"""
+    
+    try:
+        # Extract comprehensive profile
+        profile_data = await ai_agent.intelligent_profile_extraction(conversation_text, language)
         
         user_id = str(uuid4())
         profile = UserProfile(
@@ -556,6 +728,30 @@ async def create_user_profile(
         
         USERS[user_id] = profile
         
+        # Generate response in user's language
+        response_prompt = f"""Generate a friendly profile confirmation message in {SUPPORTED_LANGUAGES.get(language, 'Hindi')} for this user profile:
+        Name: {profile_data.name}
+        Location: {profile_data.location}
+        Skills: {', '.join(profile_data.skills)}
+        Experience: {profile_data.experience_years} years
+        
+        Make it conversational and encouraging. Ask if anything needs to be corrected."""
+        
+        if ai_agent.client:
+            try:
+                completion = ai_agent.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are JobKranti AI. Generate friendly, encouraging messages in Indian languages."},
+                        {"role": "user", "content": response_prompt}
+                    ]
+                )
+                ai_response = completion.choices[0].message.content
+            except:
+                ai_response = "Profile created successfully! कुछ भी बदलना हो तो बताइए।"
+        else:
+            ai_response = "Profile created successfully! कुछ भी बदलना हो तो बताइए।"
+        
         result = f"✅ **Profile Created Successfully!**\n\n"
         result += f"👤 **Name**: {profile_data.name}\n"
         result += f"📍 **Location**: {profile_data.location}\n"
@@ -563,91 +759,158 @@ async def create_user_profile(
         result += f"📅 **Experience**: {profile_data.experience_years} years\n"
         result += f"💼 **Job Preferences**: {', '.join(profile_data.job_preferences)}\n"
         result += f"⏰ **Availability**: {profile_data.availability}\n"
-        result += f"🗣️ **Language**: {profile_data.preferred_language}\n"
+        result += f"🗣️ **Language**: {SUPPORTED_LANGUAGES.get(profile_data.preferred_language, profile_data.preferred_language)}\n"
+        
+        if profile_data.immediate_need:
+            result += f"🚨 **URGENT**: Job needed immediately for survival\n"
+        
+        if profile_data.salary_expectation_min:
+            result += f"💰 **Salary Expectation**: ₹{profile_data.salary_expectation_min:,} - ₹{profile_data.salary_expectation_max or 50000:,}\n"
+        
+        result += f"\n🤖 **AI Response**: {ai_response}\n"
         result += f"🆔 **Profile ID**: `{user_id}`\n\n"
-        result += f"🎯 **Ready to find jobs!** You can now search for opportunities or get salary insights."
+        result += f"🎯 **Ready to find jobs!** Use the job search tool to find opportunities."
         
         return result
         
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to create profile: {str(e)}"))
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Profile creation failed: {str(e)}"))
 
 @mcp.tool
-async def intelligent_job_search(
-    search_query: Annotated[str, Field(description="Natural language job search query in any language")],
+async def smart_job_search(
+    search_query: Annotated[str, Field(description="Natural language job search in any Indian language")],
     user_id: Annotated[str, Field(description="User profile ID for personalized results")] = None,
-    max_results: Annotated[int, Field(description="Maximum number of results to return")] = 5
-) -> str:
-    """AI-powered job search that understands natural language queries"""
+    max_results: Annotated[int, Field(description="Maximum number of results")] = 5,
+    include_voice_response: Annotated[bool, Field(description="Generate voice response")] = False
+) -> list[TextContent | ImageContent]:
+    """AI-powered job search with voice support and multilingual understanding"""
     
     try:
+        # Detect language and analyze search query
+        language_analysis = await ai_agent.detect_language_and_intent(search_query)
+        detected_language = language_analysis.get("language", "hi")
+        
         # Get user profile if available
         user_profile = None
         if user_id and user_id in USERS:
             user_profile = USERS[user_id].profile_data
         
-        # Use AI to analyze search query
-        search_criteria = await ai_agent.analyze_job_search_query(search_query, user_profile)
+        # Analyze search criteria using AI
+        search_criteria_prompt = f"""Analyze this job search query in {SUPPORTED_LANGUAGES.get(detected_language, 'Hindi')}:
+        "{search_query}"
         
-        # Search through available jobs with intelligent matching
-        matching_jobs = []
-        for job in JOBS.values():
-            score = 0
-            posting = job.posting_data
-            
-            # Location matching
-            if search_criteria.location.lower() in posting.location.lower() or search_criteria.location.lower() == "any location":
-                score += 30
-            
-            # Job type matching
-            for job_type in search_criteria.job_types:
-                if job_type.lower() in posting.category.lower() or job_type.lower() in posting.title.lower():
-                    score += 40
-                    break
-            
-            # Salary matching
-            if search_criteria.salary_min and posting.salary_max >= search_criteria.salary_min:
-                score += 20
-            if search_criteria.salary_max and posting.salary_min <= search_criteria.salary_max:
-                score += 20
-            
-            # Urgency matching
-            if search_criteria.urgency == posting.urgency:
-                score += 15
-            
-            # User skills matching (if profile available)
-            if user_profile:
-                for skill in user_profile.skills:
-                    if skill.lower() in posting.description.lower():
-                        score += 10
-            
-            if score > 20:  # Minimum threshold
-                matching_jobs.append((job, score))
+        Extract:
+        - What types of jobs they want
+        - Preferred location
+        - Salary expectations
+        - Urgency level
+        - Any special requirements
         
-        # Sort by relevance
-        matching_jobs.sort(key=lambda x: x[1], reverse=True)
-        matching_jobs = matching_jobs[:max_results]
+        Handle colloquial terms and code-mixing. If someone says "koi bhi kaam" or "any job", set survival_mode=true."""
+        
+        if ai_agent.client:
+            try:
+                completion = ai_agent.client.beta.chat.completions.parse(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are an expert at understanding job search queries in Indian languages."},
+                        {"role": "user", "content": search_criteria_prompt}
+                    ],
+                    response_format=JobSearchCriteria
+                )
+                search_criteria = completion.choices[0].message.parsed
+            except:
+                # Fallback basic parsing
+                search_criteria = JobSearchCriteria(
+                    job_types=["general"],
+                    location="any",
+                    urgency="flexible",
+                    work_type="full_time",
+                    survival_mode="koi bhi" in search_query.lower() or "any job" in search_query.lower(),
+                    language_detected=detected_language
+                )
+        else:
+            search_criteria = JobSearchCriteria(
+                job_types=["general"],
+                location="any", 
+                urgency="flexible",
+                work_type="full_time",
+                survival_mode=False,
+                language_detected=detected_language
+            )
+        
+        # Get available jobs
+        available_jobs = list(JOBS.values())
+        
+        # Use AI for intelligent job matching if user profile available
+        if user_profile and ai_agent.client:
+            scored_jobs = await ai_agent.intelligent_job_matching(user_profile, available_jobs)
+        else:
+            # Basic matching for users without profiles
+            scored_jobs = []
+            for job in available_jobs:
+                score = 50  # Base score
+                
+                # Location matching
+                if search_criteria.location.lower() != "any":
+                    if search_criteria.location.lower() in job.posting_data.location.lower():
+                        score += 30
+                else:
+                    score += 20  # Any location is okay
+                
+                # Job type matching
+                for job_type in search_criteria.job_types:
+                    if job_type.lower() in job.posting_data.category.lower() or job_type.lower() in job.posting_data.title.lower():
+                        score += 25
+                        break
+                
+                # Urgency matching
+                if search_criteria.urgency == job.posting_data.urgency:
+                    score += 15
+                
+                # Survival mode - show any available job
+                if search_criteria.survival_mode:
+                    score += 20
+                
+                scored_jobs.append((job, score, None))
+            
+            scored_jobs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Filter and limit results
+        matching_jobs = scored_jobs[:max_results]
         
         if not matching_jobs:
-            return f"❌ **No jobs found for**: '{search_query}'\n\n" \
-                   f"💡 **Try searching for**:\n" \
-                   f"• Security guard jobs in Delhi\n" \
-                   f"• Delivery work near me\n" \
-                   f"• House cleaning jobs\n" \
-                   f"• Driver jobs with good salary"
+            no_jobs_response = f"❌ **No jobs found for**: '{search_query}'\n\n"
+            if detected_language == "hi":
+                no_jobs_response += f"💡 **कोशिश करें**:\n• Security guard jobs\n• Delivery work\n• House cleaning\n• कोई भी काम"
+            else:
+                no_jobs_response += f"💡 **Try searching for**:\n• Security guard jobs\n• Delivery work\n• House cleaning\n• Any available work"
+            
+            return [TextContent(type="text", text=no_jobs_response)]
         
+        # Build response
         result = f"🔍 **Found {len(matching_jobs)} jobs for**: '{search_query}'\n\n"
+        result += f"🌐 **Language**: {SUPPORTED_LANGUAGES.get(detected_language, detected_language)}\n"
         result += f"📊 **Search Analysis**:\n"
         result += f"• Job types: {', '.join(search_criteria.job_types)}\n"
         result += f"• Location: {search_criteria.location}\n"
-        result += f"• Urgency: {search_criteria.urgency}\n\n"
+        result += f"• Urgency: {search_criteria.urgency}\n"
         
-        for i, (job, score) in enumerate(matching_jobs, 1):
+        if search_criteria.survival_mode:
+            result += f"🚨 **SURVIVAL MODE**: Showing any available work\n"
+        
+        result += "\n"
+        
+        for i, (job, score, analysis) in enumerate(matching_jobs, 1):
             posting = job.posting_data
             
-            # Analyze safety
-            safety = await ai_agent.analyze_job_safety(posting.description, posting.salary_max, "Unknown")
-            safety_emoji = "🟢" if safety.safety_level == "SAFE" else "🟡" if safety.safety_level == "MEDIUM_RISK" else "🔴"
+            # Determine emoji based on job safety and quality
+            if score >= 80:
+                safety_emoji = "🟢"
+            elif score >= 60:
+                safety_emoji = "🟡"
+            else:
+                safety_emoji = "🔴"
             
             result += f"**{i}. {safety_emoji} {posting.title}**\n"
             result += f"   📍 {posting.location}\n"
@@ -655,33 +918,86 @@ async def intelligent_job_search(
             if posting.salary_max != posting.salary_min:
                 result += f" - ₹{posting.salary_max:,}"
             result += f"/month\n"
-            result += f"   ⏰ {posting.job_type.replace('_', ' ').title()}\n"
+            result += f"   ⏰ {posting.working_hours}\n"
             result += f"   📱 Contact: {posting.contact_info}\n"
             result += f"   🎯 Match Score: {score}%\n"
             
-            if safety.scam_indicators:
-                result += f"   ⚠️ Risks: {', '.join(safety.scam_indicators[:2])}\n"
+            if analysis and analysis.match_reasons:
+                result += f"   ✅ Why it matches: {', '.join(analysis.match_reasons[:2])}\n"
             
-            result += f"   📝 {posting.description[:80]}...\n\n"
+            if posting.urgency in ["immediate", "today"]:
+                result += f"   🚨 **URGENT REQUIREMENT**\n"
+            
+            result += f"   📝 {posting.description[:100]}...\n\n"
         
-        return result
+        content_list = [TextContent(type="text", text=result)]
+        
+        # Generate voice response if requested
+        if include_voice_response and ai_agent.client:
+            voice_summary = f"Found {len(matching_jobs)} jobs for you. Top match is {matching_jobs[0][0].posting_data.title} in {matching_jobs[0][0].posting_data.location} for ₹{matching_jobs[0][0].posting_data.salary_min} per month."
+            
+            try:
+                voice_bytes = await ai_agent.generate_voice_response(voice_summary, detected_language)
+                if voice_bytes:
+                    voice_base64 = base64.b64encode(voice_bytes).decode('utf-8')
+                    content_list.append(ImageContent(
+                        type="image",
+                        mimeType="audio/mpeg", 
+                        data=voice_base64
+                    ))
+            except Exception as e:
+                print(f"Voice generation error: {e}")
+        
+        return content_list
         
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Search failed: {str(e)}"))
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Job search failed: {str(e)}"))
 
 @mcp.tool
-async def post_job_intelligently(
-    job_posting_text: Annotated[str, Field(description="Natural language job posting in any language")],
-    employer_contact: Annotated[str, Field(description="Employer contact information")]
+async def post_job_with_ai(
+    job_description: Annotated[str, Field(description="Natural language job posting in any Indian language")],
+    employer_contact: Annotated[str, Field(description="Employer contact information")],
+    employer_language: Annotated[str, Field(description="Employer's preferred language")] = "hi"
 ) -> str:
-    """Post a job by analyzing natural language description using AI"""
+    """Post a job using AI to parse natural language descriptions"""
     
     try:
-        # Use AI to analyze and structure the job posting
-        posting_data = await ai_agent.analyze_job_posting(job_posting_text)
+        # Detect language and parse job posting
+        language_analysis = await ai_agent.detect_language_and_intent(job_description)
+        detected_language = language_analysis.get("language", employer_language)
         
-        # Override contact info with provided one
-        posting_data.contact_info = employer_contact
+        # Use AI to structure the job posting
+        if ai_agent.client:
+            try:
+                system_prompt = f"""Parse this job posting in {SUPPORTED_LANGUAGES.get(detected_language, 'Hindi')} and extract structured information.
+                
+                Handle:
+                - Local terms (e.g., "काम", "नौकरी", "मजदूरी")
+                - Salary in various formats (₹15000, 15k, पंद्रह हजार)
+                - Location nicknames and areas
+                - Urgency indicators ("तुरंत", "urgent", "abhi chahiye")
+                - Benefits mentioned casually
+                """
+                
+                completion = ai_agent.client.beta.chat.completions.parse(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Parse this job posting: {job_description}"}
+                    ],
+                    response_format=JobPostingSchema
+                )
+                
+                posting_data = completion.choices[0].message.parsed
+                posting_data.contact_info = employer_contact
+                posting_data.original_language = detected_language
+                
+            except Exception as e:
+                print(f"AI parsing error: {e}")
+                # Fallback parsing
+                posting_data = await _fallback_parse_job_posting(job_description, employer_contact, detected_language)
+        else:
+            posting_data = await _fallback_parse_job_posting(job_description, employer_contact, detected_language)
         
         job_id = str(uuid4())
         job = JobPosting(
@@ -693,507 +1009,671 @@ async def post_job_intelligently(
         
         JOBS[job_id] = job
         
-        # Find matching candidates
-        matching_candidates = []
-        for user in USERS.values():
-            score = 0
-            profile = user.profile_data
+        # Find potential candidates using AI matching
+        potential_candidates = []
+        if USERS:
+            user_profiles = [user.profile_data for user in USERS.values()]
             
-            # Location match
-            if posting_data.location.lower() in profile.location.lower():
-                score += 30
-            
-            # Skills match
-            for skill in profile.skills:
-                if skill.lower() in posting_data.category.lower() or skill.lower() in posting_data.description.lower():
-                    score += 25
-                    break
-            
-            # Experience match
-            if profile.experience_years >= 1:  # Some experience
-                score += 15
-            
-            if score > 25:
-                matching_candidates.append((user, score))
+            for user_id, user in USERS.items():
+                try:
+                    # Calculate match score
+                    score = 0
+                    profile = user.profile_data
+                    
+                    # Location match
+                    if posting_data.location.lower() in profile.location.lower():
+                        score += 30
+                    
+                    # Skills match
+                    for skill in profile.skills:
+                        if skill.lower() in posting_data.category.lower() or skill.lower() in posting_data.description.lower():
+                            score += 25
+                            break
+                    
+                    # Salary compatibility
+                    if profile.salary_expectation_max and posting_data.salary_min <= profile.salary_expectation_max:
+                        score += 20
+                    
+                    # Immediate need match
+                    if profile.immediate_need and posting_data.urgency in ["immediate", "today"]:
+                        score += 25
+                    
+                    if score > 30:
+                        potential_candidates.append((user, score))
+                        
+                except Exception as e:
+                    print(f"Candidate matching error: {e}")
         
-        # Sort candidates by relevance
-        matching_candidates.sort(key=lambda x: x[1], reverse=True)
+        # Sort candidates by score
+        potential_candidates.sort(key=lambda x: x[1], reverse=True)
         
-        result = f"✅ **Job Posted Successfully!**\n\n"
+        # Generate response in employer's language
+        if detected_language == "hi":
+            success_msg = "नौकरी सफलतापूर्वक पोस्ट की गई!"
+            job_details = f"""
+📋 **पद**: {posting_data.title}
+📍 **स्थान**: {posting_data.location}
+💰 **वेतन**: ₹{posting_data.salary_min:,} - ₹{posting_data.salary_max:,}/महीना
+⏰ **समय**: {posting_data.working_hours}
+📱 **संपर्क**: {posting_data.contact_info}
+"""
+        else:
+            success_msg = "Job posted successfully!"
+            job_details = f"""
+📋 **Position**: {posting_data.title}
+📍 **Location**: {posting_data.location}
+💰 **Salary**: ₹{posting_data.salary_min:,} - ₹{posting_data.salary_max:,}/month
+⏰ **Hours**: {posting_data.working_hours}
+📱 **Contact**: {posting_data.contact_info}
+"""
+        
+        result = f"✅ **{success_msg}**\n\n"
         result += f"🆔 **Job ID**: `{job_id}`\n"
-        result += f"📋 **Title**: {posting_data.title}\n"
-        result += f"📍 **Location**: {posting_data.location}\n"
-        result += f"💰 **Salary**: ₹{posting_data.salary_min:,}"
-        if posting_data.salary_max != posting_data.salary_min:
-            result += f" - ₹{posting_data.salary_max:,}"
-        result += f"/month\n"
-        result += f"⏰ **Type**: {posting_data.job_type.replace('_', ' ').title()}\n"
-        result += f"🏷️ **Category**: {posting_data.category.title()}\n"
-        result += f"📱 **Contact**: {posting_data.contact_info}\n"
-       
-        if posting_data.urgency == "immediate":
+        result += job_details
+        
+        if posting_data.urgency in ["immediate", "today"]:
             result += f"🚨 **URGENT REQUIREMENT**\n"
-       
-        if posting_data.requirements:
-            result += f"📝 **Requirements**: {', '.join(posting_data.requirements)}\n"
-       
+        
         if posting_data.benefits:
             result += f"🎁 **Benefits**: {', '.join(posting_data.benefits)}\n"
-       
-        if matching_candidates:
-            result += f"\n🎯 **Found {len(matching_candidates)} Potential Candidates:**\n"
-            for user, score in matching_candidates[:3]:  # Show top 3
+        
+        if potential_candidates:
+            result += f"\n🎯 **Found {len(potential_candidates)} Potential Candidates:**\n"
+            for (user, score) in potential_candidates[:3]:
                 profile = user.profile_data
-                result += f"• **{profile.name}** ({profile.location}) - {', '.join(profile.skills)} - {profile.experience_years}yr exp\n"
+                result += f"• **{profile.name}** ({profile.location}) - {', '.join(profile.skills[:2])} - {profile.experience_years}yr exp - Score: {score}%\n"
+                if profile.immediate_need:
+                    result += f"  🚨 *Needs job immediately*\n"
         else:
-            result += f"\n📢 **Your job will be visible to all job seekers in {posting_data.location}**"
-       
-        result += f"\n💡 **Next Steps**: Candidates will contact you directly at {posting_data.contact_info}"
-       
+            if detected_language == "hi":
+                result += f"\n📢 **आपकी नौकरी {posting_data.location} के सभी जॉब सीकर्स को दिखेगी**"
+            else:
+                result += f"\n📢 **Your job will be visible to all job seekers in {posting_data.location}**"
+        
+        if detected_language == "hi":
+            result += f"\n💡 **अगला कदम**: उम्मीदवार आपसे {posting_data.contact_info} पर संपर्क करेंगे"
+        else:
+            result += f"\n💡 **Next Steps**: Candidates will contact you directly at {posting_data.contact_info}"
+        
         return result
-       
+        
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to post job: {str(e)}"))
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Job posting failed: {str(e)}"))
+
+async def _fallback_parse_job_posting(description: str, contact: str, language: str) -> JobPostingSchema:
+    """Fallback job posting parser without AI"""
+    
+    # Extract salary
+    salary_patterns = [
+        r"₹\s*(\d+(?:,\d+)*)",
+        r"(\d+)k",
+        r"(\d+)\s*हजार",
+        r"(\d+)\s*thousand"
+    ]
+    
+    salary = 15000  # Default
+    for pattern in salary_patterns:
+        match = re.search(pattern, description.lower())
+        if match:
+            amount = int(match.group(1).replace(',', ''))
+            if 'k' in pattern or 'हजार' in pattern or 'thousand' in pattern:
+                amount *= 1000
+            salary = amount
+            break
+    
+    # Determine category
+    category = "general"
+    category_keywords = {
+        "security": ["security", "guard", "सिक्यूरिटी", "गार्ड"],
+        "delivery": ["delivery", "courier", "डिलीवरी"],
+        "cleaning": ["clean", "maid", "साफ", "सफाई"],
+        "cooking": ["cook", "chef", "खाना", "पकाना"],
+        "construction": ["construction", "निर्माण", "मजदूर"]
+    }
+    
+    for cat, keywords in category_keywords.items():
+        if any(keyword in description.lower() for keyword in keywords):
+            category = cat
+            break
+    
+    # Determine urgency
+    urgency = "flexible"
+    if any(word in description.lower() for word in ["urgent", "तुरंत", "immediately", "abhi"]):
+        urgency = "immediate"
+    
+    return JobPostingSchema(
+        title=f"{category.title()} Position",
+        description=description,
+        location="Location not specified",
+        salary_min=salary,
+        salary_max=salary,
+        job_type="full_time",
+        category=category,
+        requirements=["Experience preferred"],
+        contact_info=contact,
+        urgency=urgency,
+        benefits=[],
+        working_hours="Standard hours",
+        original_language=language
+    )
 
 @mcp.tool
-async def generate_smart_resume(
-   user_id: Annotated[str, Field(description="User profile ID")],
-   target_job_description: Annotated[str, Field(description="Target job description to tailor resume for")]
-) -> list[TextContent | ImageContent]:
-   """Generate AI-tailored resume based on user profile and target job"""
-   
-   if user_id not in USERS:
-       raise McpError(ErrorData(code=INVALID_PARAMS, message="User profile not found"))
-   
-   try:
-       profile = USERS[user_id].profile_data
-       
-       # Use AI to analyze target job and tailor resume
-       job_analysis = await ai_agent.analyze_job_posting(target_job_description)
-       
-       # Create tailored resume
-       img = Image.new('RGB', (800, 1100), color='white')
-       draw = ImageDraw.Draw(img)
-       
-       # Try to load fonts
-       try:
-           title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
-           header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
-           body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-           small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-       except:
-           title_font = header_font = body_font = small_font = ImageFont.load_default()
-       
-       y = 40
-       
-       # Header with name
-       draw.text((50, y), profile.name.upper(), fill='#2C3E50', font=title_font)
-       y += 50
-       
-       # Contact info
-       draw.text((50, y), f"📱 {USERS[user_id].phone}  📍 {profile.location}", fill='#34495E', font=body_font)
-       y += 35
-       
-       # Horizontal line
-       draw.line([(50, y), (750, y)], fill='#BDC3C7', width=2)
-       y += 30
-       
-       # Professional objective (tailored to job)
-       draw.text((50, y), "PROFESSIONAL OBJECTIVE", fill='#2C3E50', font=header_font)
-       y += 35
-       objective = f"Seeking {job_analysis.title} position in {job_analysis.location} area. "
-       objective += f"Bringing {profile.experience_years} years of relevant experience "
-       objective += f"in {', '.join(profile.skills[:3])} to contribute to organizational success."
-       
-       # Word wrap for objective
-       words = objective.split()
-       lines = []
-       current_line = []
-       for word in words:
-           test_line = ' '.join(current_line + [word])
-           if len(test_line) <= 80:  # Approximate characters per line
-               current_line.append(word)
-           else:
-               lines.append(' '.join(current_line))
-               current_line = [word]
-       if current_line:
-           lines.append(' '.join(current_line))
-       
-       for line in lines:
-           draw.text((50, y), line, fill='#2C3E50', font=small_font)
-           y += 25
-       y += 20
-       
-       # Experience section
-       draw.text((50, y), "WORK EXPERIENCE", fill='#2C3E50', font=header_font)
-       y += 35
-       
-       if profile.experience_years > 0:
-           # Tailor experience to match job requirements
-           relevant_skills = [skill for skill in profile.skills if skill.lower() in job_analysis.description.lower()]
-           if not relevant_skills:
-               relevant_skills = profile.skills[:2]
-           
-           draw.text((50, y), f"• {profile.experience_years} years of professional experience", fill='#2C3E50', font=body_font)
-           y += 30
-           draw.text((50, y), f"• Specialized in: {', '.join(relevant_skills)}", fill='#2C3E50', font=body_font)
-           y += 30
-           draw.text((50, y), f"• Proven track record in {profile.location} area", fill='#2C3E50', font=body_font)
-           y += 30
-       else:
-           draw.text((50, y), "• Fresh candidate with strong motivation to learn", fill='#2C3E50', font=body_font)
-           y += 30
-           draw.text((50, y), f"• Ready to apply {', '.join(profile.skills)} skills", fill='#2C3E50', font=body_font)
-           y += 30
-       
-       y += 20
-       
-       # Skills section (prioritized based on job requirements)
-       draw.text((50, y), "KEY SKILLS", fill='#2C3E50', font=header_font)
-       y += 35
-       
-       # Prioritize skills that match job requirements
-       job_relevant_skills = []
-       other_skills = []
-       for skill in profile.skills:
-           if skill.lower() in job_analysis.description.lower() or skill.lower() in job_analysis.category.lower():
-               job_relevant_skills.append(skill + " ⭐")  # Mark as relevant
-           else:
-               other_skills.append(skill)
-       
-       all_skills = job_relevant_skills + other_skills
-       skills_text = " • ".join(all_skills)
-       
-       # Word wrap skills
-       words = skills_text.split()
-       lines = []
-       current_line = []
-       for word in words:
-           test_line = ' '.join(current_line + [word])
-           if len(test_line) <= 70:
-               current_line.append(word)
-           else:
-               lines.append(' '.join(current_line))
-               current_line = [word]
-       if current_line:
-           lines.append(' '.join(current_line))
-       
-       for line in lines:
-           draw.text((50, y), line, fill='#2C3E50', font=body_font)
-           y += 25
-       
-       y += 30
-       
-       # Additional qualifications
-       draw.text((50, y), "ADDITIONAL QUALIFICATIONS", fill='#2C3E50', font=header_font)
-       y += 35
-       
-       qualifications = [
-           f"• Available for {profile.availability} work",
-           f"• Preferred communication in {profile.preferred_language.upper()}",
-           f"• Local knowledge of {profile.location} area",
-           "• Reliable and punctual work ethic"
-       ]
-       
-       # Add job-specific qualifications
-       if job_analysis.urgency == "immediate":
-           qualifications.insert(1, "• Available for immediate joining")
-       
-       for qual in qualifications:
-           draw.text((50, y), qual, fill='#2C3E50', font=body_font)
-           y += 25
-       
-       # Footer
-       y = 1050
-       draw.text((50, y), f"Resume generated by JobKranti AI • Tailored for {job_analysis.category.title()} positions", 
-                fill='#7F8C8D', font=small_font)
-       
-       # Convert to base64
-       buf = io.BytesIO()
-       img.save(buf, format='PNG')
-       resume_base64 = base64.b64encode(buf.getvalue()).decode('utf-8')
-       
-       return [
-           TextContent(
-               type="text",
-               text=f"📄 **AI-Tailored Resume Generated!**\n\n"
-                    f"👤 **Candidate**: {profile.name}\n"
-                    f"🎯 **Tailored for**: {job_analysis.title}\n"
-                    f"📍 **Location**: {profile.location}\n"
-                    f"📅 **Experience**: {profile.experience_years} years\n"
-                    f"⭐ **Highlighted Skills**: {', '.join([s for s in profile.skills if s.lower() in job_analysis.description.lower()][:3])}\n\n"
-                    f"🤖 **AI Optimization**: Resume automatically optimized based on job requirements\n"
-                    f"💡 **Pro Tip**: Skills matching job requirements are marked with ⭐"
-           ),
-           ImageContent(
-               type="image",
-               mimeType="image/png",
-               data=resume_base64
-           )
-       ]
-       
-   except Exception as e:
-       raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Resume generation failed: {str(e)}"))
-
-@mcp.tool
-async def ai_job_safety_analysis(
-   job_description: Annotated[str, Field(description="Complete job description to analyze")],
-   salary_offered: Annotated[int, Field(description="Salary amount offered")],
-   company_name: Annotated[str, Field(description="Company or employer name")] = "Unknown"
+async def conversational_job_assistant(
+    user_message: Annotated[str, Field(description="User's message in any language")],
+    user_phone: Annotated[str, Field(description="User's phone number")],
+    conversation_context: Annotated[str, Field(description="Previous conversation context")] = ""
 ) -> str:
-   """AI-powered comprehensive job safety and scam detection analysis"""
-   
-   try:
-       # Use AI for comprehensive safety analysis
-       safety_analysis = await ai_agent.analyze_job_safety(job_description, salary_offered, company_name)
-       
-       result = f"🔍 **AI-Powered Job Safety Analysis**\n\n"
-       result += f"🏢 **Company**: {company_name}\n"
-       result += f"💰 **Salary**: ₹{salary_offered:,}/month\n\n"
-       
-       # Safety level with detailed explanation
-       if safety_analysis.safety_level == "SAFE":
-           result += f"✅ **Safety Assessment: SAFE TO PROCEED**\n"
-           result += f"🎯 **Recommendation**: {safety_analysis.recommendation}\n"
-       elif safety_analysis.safety_level == "MEDIUM_RISK":
-           result += f"⚠️ **Safety Assessment: PROCEED WITH CAUTION**\n"
-           result += f"🎯 **Recommendation**: {safety_analysis.recommendation}\n"
-       else:
-           result += f"🚨 **Safety Assessment: HIGH RISK - AVOID**\n"
-           result += f"🎯 **Recommendation**: {safety_analysis.recommendation}\n"
-       
-       result += f"📊 **AI Risk Score**: {safety_analysis.risk_score}/100\n\n"
-       
-       # Detailed AI analysis
-       result += f"🤖 **AI Analysis**: {safety_analysis.explanation}\n\n"
-       
-       if safety_analysis.scam_indicators:
-           result += f"🚨 **Red Flags Detected**:\n"
-           for indicator in safety_analysis.scam_indicators:
-               result += f"• {indicator}\n"
-           result += "\n"
-       
-       if safety_analysis.legitimate_indicators:
-           result += f"✅ **Positive Indicators**:\n"
-           for indicator in safety_analysis.legitimate_indicators:
-               result += f"• {indicator}\n"
-           result += "\n"
-       
-       result += f"💡 **General Safety Tips**:\n"
-       result += f"• Never pay any registration or processing fees\n"
-       result += f"• Verify company details through official channels\n"
-       result += f"• Meet in public places for interviews\n"
-       result += f"• Trust your instincts if something feels wrong\n"
-       result += f"• Check with local authorities if suspicious\n"
-       
-       return result
-       
-   except Exception as e:
-       raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Safety analysis failed: {str(e)}"))
+    """Intelligent conversational assistant that handles job-related queries with follow-ups"""
+    
+    try:
+        # Detect language and intent
+        language_analysis = await ai_agent.detect_language_and_intent(user_message)
+        detected_language = language_analysis.get("language", "hi")
+        intent = language_analysis.get("intent", "general")
+        
+        # Get or create conversation session
+        session_id = f"{user_phone}_{datetime.now().strftime('%Y%m%d')}"
+        if session_id not in CONVERSATIONS:
+            CONVERSATIONS[session_id] = ConversationSession(
+                user_id=user_phone,
+                session_id=session_id,
+                messages=[],
+                current_intent=intent,
+                language=detected_language
+            )
+        
+        session = CONVERSATIONS[session_id]
+        session.messages.append({"role": "user", "content": user_message})
+        session.last_interaction = datetime.now()
+        
+        # Generate contextual response
+        if ai_agent.client:
+            try:
+                # Build conversation context
+                recent_messages = session.messages[-10:]  # Last 10 messages
+                context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_messages])
+                
+                system_prompt = f"""You are JobKranti AI, a helpful assistant for India's job marketplace.
+                
+                User's language: {SUPPORTED_LANGUAGES.get(detected_language, detected_language)}
+                Current intent: {intent}
+                
+                Guidelines:
+                1. Respond primarily in the user's detected language
+                2. Be empathetic to economic pressures and family situations
+                3. Ask relevant follow-up questions to help users
+                4. Guide toward actionable outcomes (profile creation, job search, job posting)
+                5. Handle urgent survival needs sensitively
+                6. Support blue-collar, gig, and informal workers
+                7. Use simple, respectful language
+                8. Offer specific help based on their situation
+                
+                Current conversation context: {context}
+                
+                Provide helpful, actionable guidance."""
+                
+                completion = ai_agent.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message}
+                    ]
+                )
+                
+                ai_response = completion.choices[0].message.content
+                
+            except Exception as e:
+                print(f"Conversational AI error: {e}")
+                ai_response = await _fallback_conversational_response(user_message, detected_language, intent)
+        else:
+            ai_response = await _fallback_conversational_response(user_message, detected_language, intent)
+        
+        # Add AI response to session
+        session.messages.append({"role": "assistant", "content": ai_response})
+        
+        # Format final response
+        result = f"🤖 **JobKranti AI Assistant**\n\n"
+        result += f"🗣️ **You**: {user_message}\n\n"
+        result += f"💬 **Response**: {ai_response}\n\n"
+        result += f"🌐 **Language**: {SUPPORTED_LANGUAGES.get(detected_language, detected_language)}\n"
+        result += f"🎯 **Intent**: {intent}\n"
+        result += f"🆔 **Session**: {session_id}"
+        
+        return result
+        
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Conversation failed: {str(e)}"))
+
+async def _fallback_conversational_response(message: str, language: str, intent: str) -> str:
+    """Fallback conversational responses"""
+    
+    responses = {
+        "hi": {
+            "job_search": "मैं आपको नौकरी खोजने में मदद कर सकता हूं। आप किस तरह का काम ढूंढ रहे हैं?",
+            "profile": "आपकी प्रोफाइल बनाने के लिए, कृपया अपना नाम, कहां रहते हैं, और क्या काम करते हैं बताइए।",
+            "general": "मैं JobKranti AI हूं। मैं नौकरी खोजने और देने में आपकी मदद कर सकता हूं। आप क्या चाहते हैं?"
+        },
+        "en": {
+            "job_search": "I can help you find a job. What kind of work are you looking for?",
+            "profile": "To create your profile, please tell me your name, where you live, and what work you do.",
+            "general": "I'm JobKranti AI. I can help you find jobs or post job openings. What do you need?"
+        }
+    }
+    
+    lang_responses = responses.get(language, responses["en"])
+    return lang_responses.get(intent, lang_responses["general"])
 
 @mcp.tool
-async def ai_salary_insights(
-   job_category: Annotated[str, Field(description="Job category or type")],
-   location: Annotated[str, Field(description="City or location")],
-   experience_level: Annotated[str, Field(description="Experience level: fresher, experienced, expert")] = "experienced"
+async def emergency_job_finder(
+    user_message: Annotated[str, Field(description="Urgent job search request in any language")],
+    user_phone: Annotated[str, Field(description="User's phone number")],
+    location: Annotated[str, Field(description="User's current location")] = ""
 ) -> str:
-   """Get AI-powered salary insights and market intelligence"""
-   
-   try:
-       # Use AI for comprehensive salary analysis
-       insights = await ai_agent.get_salary_insights(job_category, location, experience_level)
-       
-       result = f"💰 **AI-Powered Salary Insights**\n\n"
-       result += f"🏷️ **Job Category**: {job_category.title()}\n"
-       result += f"📍 **Location**: {location.title()}\n"
-       result += f"👤 **Experience Level**: {experience_level.title()}\n\n"
-       
-       # Salary range
-       avg_salary = (insights.salary_range_min + insights.salary_range_max) // 2
-       result += f"💵 **Salary Analysis**:\n"
-       result += f"• **Range**: ₹{insights.salary_range_min:,} - ₹{insights.salary_range_max:,}/month\n"
-       result += f"• **Average**: ₹{avg_salary:,}/month\n"
-       result += f"• **Market Demand**: {insights.demand_level}\n\n"
-       
-       # Market factors
-       result += f"📊 **Market Factors**:\n"
-       for factor in insights.market_factors:
-           result += f"• {factor}\n"
-       result += "\n"
-       
-       # Career growth
-       result += f"📈 **Growth Potential**: {insights.growth_potential}\n\n"
-       
-       # Negotiation tips
-       result += f"🎯 **AI-Powered Negotiation Tips**:\n"
-       for tip in insights.negotiation_tips:
-           result += f"• {tip}\n"
-       result += "\n"
-       
-       # Additional insights based on demand level
-       if insights.demand_level == "HIGH":
-           result += f"🔥 **Market Opportunity**: High demand! You have strong negotiating power.\n"
-       elif insights.demand_level == "MEDIUM":
-           result += f"⚖️ **Market Opportunity**: Balanced market. Focus on highlighting unique skills.\n"
-       else:
-           result += f"💡 **Market Opportunity**: Consider skill development or location flexibility.\n"
-       
-       # Experience-based advice
-       if experience_level == "fresher":
-           result += f"🌱 **Fresher Tip**: Gain 2-3 years experience to increase salary by 40-60%\n"
-       elif experience_level == "experienced":
-           result += f"⭐ **Experienced Advantage**: Your experience commands premium in this market\n"
-       else:
-           result += f"🏆 **Expert Level**: Consider leadership roles or specialized positions\n"
-       
-       return result
-       
-   except Exception as e:
-       raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Salary insights failed: {str(e)}"))
+    """Emergency job finder for people who need work immediately for survival"""
+    
+    try:
+        # Detect language
+        language_analysis = await ai_agent.detect_language_and_intent(user_message)
+        detected_language = language_analysis.get("language", "hi")
+        
+        # Find all immediate/urgent jobs
+        urgent_jobs = []
+        for job in JOBS.values():
+            posting = job.posting_data
+            if posting.urgency in ["immediate", "today"]:
+                urgent_jobs.append(job)
+        
+        # Sort by salary (higher first) for survival situations
+        urgent_jobs.sort(key=lambda x: x.posting_data.salary_max, reverse=True)
+        
+        if not urgent_jobs:
+            if detected_language == "hi":
+                return """🚨 **तुरंत काम चाहिए - Emergency Support**
+
+फिलहाल कोई तुरंत वाली नौकरी उपलब्ध नहीं है। लेकिन यहां कुछ तुरंत कमाई के तरीके हैं:
+
+📞 **तुरंत संपर्क करें**:
+• Zomato/Swiggy delivery: Call local office
+• Ola/Uber driver: Apply online
+• Construction daily labor: पास के साइट पर जाएं
+• House cleaning: आस-पास के घरों में पूछें
+
+💡 **आज ही कमाई शुरू**:
+• Daily wage labor: ₹400-600/day
+• Food delivery: ₹800-1200/day
+• House help: ₹300-500/day
+
+🆘 **Emergency Help**: अगर बहुत ज्यादा परेशानी है तो local NGO या helpline से संपर्क करें।
+
+हम आपकी प्रोफाइल बना देते हैं ताकि नई नौकरियां आते ही आपको पता चल जाए।"""
+            else:
+                return """🚨 **Need Work Immediately - Emergency Support**
+
+No urgent jobs available right now, but here are immediate earning options:
+
+📞 **Contact Immediately**:
+• Zomato/Swiggy delivery: Call local office
+• Ola/Uber driver: Apply online  
+• Construction daily labor: Visit nearby sites
+• House cleaning: Ask nearby homes
+
+💡 **Start Earning Today**:
+• Daily wage labor: ₹400-600/day
+• Food delivery: ₹800-1200/day
+• House help: ₹300-500/day
+
+🆘 **Emergency Help**: If in severe distress, contact local NGO or helpline.
+
+Let me create your profile so you get notified immediately when new jobs come."""
+        
+        # Show urgent jobs
+        result = f"🚨 **EMERGENCY JOB SEARCH** 🚨\n\n"
+        
+        if detected_language == "hi":
+            result += f"तुरंत काम चाहिए - यहां हैं {len(urgent_jobs)} नौकरियां:\n\n"
+        else:
+            result += f"Need work immediately - Here are {len(urgent_jobs)} urgent jobs:\n\n"
+        
+        for i, job in enumerate(urgent_jobs[:5], 1):
+            posting = job.posting_data
+            result += f"**{i}. 🔥 {posting.title}**\n"
+            result += f"   📍 {posting.location}\n"
+            result += f"   💰 ₹{posting.salary_min:,}/month (₹{posting.salary_min//30:,}/day)\n"
+            result += f"   📱 **CALL NOW**: {posting.contact_info}\n"
+            result += f"   ⏰ Start: {posting.urgency.upper()}\n"
+            result += f"   📝 {posting.description[:80]}...\n\n"
+        
+        if detected_language == "hi":
+            result += f"🔥 **तुरंत action लें**:\n"
+            result += f"1. ऊपर दिए गए नंबरों पर अभी कॉल करें\n"
+            result += f"2. अपना नाम, location और experience बताएं\n"
+            result += f"3. कब join कर सकते हैं बताएं\n\n"
+            result += f"💪 **हिम्मत रखें** - काम मिल जाएगा!"
+        else:
+            result += f"🔥 **Take immediate action**:\n"
+            result += f"1. Call the numbers above RIGHT NOW\n"
+            result += f"2. Tell them your name, location and experience\n"
+            result += f"3. Say when you can join\n\n"
+            result += f"💪 **Stay strong** - You will find work!"
+        
+        return result
+        
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Emergency job search failed: {str(e)}"))
 
 @mcp.tool
-async def ai_conversation_analyzer(
-   conversation_text: Annotated[str, Field(description="Any conversation text to analyze for job-related insights")],
-   analysis_type: Annotated[str, Field(description="Type of analysis: profile, job_search, job_posting, or general")] = "general"
+async def multilingual_job_matchmaker(
+    user_profile_id: Annotated[str, Field(description="User profile ID")],
+    employer_requirements: Annotated[str, Field(description="What employer is looking for in any language")],
+    employer_language: Annotated[str, Field(description="Employer's preferred language")] = "hi"
 ) -> str:
-   """Universal AI analyzer that can understand any conversation and extract job-related insights"""
-   
-   try:
-       result = f"🤖 **AI Conversation Analysis**\n\n"
-       result += f"📝 **Input**: {conversation_text[:100]}...\n"
-       result += f"🔍 **Analysis Type**: {analysis_type.title()}\n\n"
-       
-       if analysis_type == "profile":
-           # Analyze for profile creation
-           profile_data = await ai_agent.analyze_user_conversation(conversation_text, "unknown")
-           result += f"👤 **Profile Insights Extracted**:\n"
-           result += f"• **Name**: {profile_data.name}\n"
-           result += f"• **Location**: {profile_data.location}\n"
-           result += f"• **Skills**: {', '.join(profile_data.skills)}\n"
-           result += f"• **Experience**: {profile_data.experience_years} years\n"
-           result += f"• **Job Preferences**: {', '.join(profile_data.job_preferences)}\n"
-           result += f"• **Availability**: {profile_data.availability}\n"
-           result += f"• **Language**: {profile_data.preferred_language}\n"
-           
-       elif analysis_type == "job_search":
-           # Analyze for job search intent
-           search_criteria = await ai_agent.analyze_job_search_query(conversation_text)
-           result += f"🔍 **Search Intent Detected**:\n"
-           result += f"• **Job Types**: {', '.join(search_criteria.job_types)}\n"
-           result += f"• **Location**: {search_criteria.location}\n"
-           result += f"• **Salary Range**: ₹{search_criteria.salary_min or 'Not specified'} - ₹{search_criteria.salary_max or 'Not specified'}\n"
-           result += f"• **Work Type**: {search_criteria.work_type}\n"
-           result += f"• **Urgency**: {search_criteria.urgency}\n"
-           result += f"• **Requirements**: {', '.join(search_criteria.additional_requirements) if search_criteria.additional_requirements else 'None specified'}\n"
-           
-       elif analysis_type == "job_posting":
-           # Analyze for job posting structure
-           posting_data = await ai_agent.analyze_job_posting(conversation_text)
-           result += f"💼 **Job Posting Structure**:\n"
-           result += f"• **Title**: {posting_data.title}\n"
-           result += f"• **Category**: {posting_data.category}\n"
-           result += f"• **Location**: {posting_data.location}\n"
-           result += f"• **Salary**: ₹{posting_data.salary_min:,} - ₹{posting_data.salary_max:,}\n"
-           result += f"• **Type**: {posting_data.job_type}\n"
-           result += f"• **Urgency**: {posting_data.urgency}\n"
-           result += f"• **Requirements**: {', '.join(posting_data.requirements)}\n"
-           result += f"• **Benefits**: {', '.join(posting_data.benefits) if posting_data.benefits else 'None mentioned'}\n"
-           
-       else:
-           # General analysis - try to understand intent
-           result += f"🎯 **General Analysis**:\n"
-           
-           # Try to detect what the conversation is about
-           if any(word in conversation_text.lower() for word in ["job", "work", "naukri", "kaam"]):
-               result += f"• **Topic**: Job-related conversation detected\n"
-               
-               # Try profile analysis
-               try:
-                   profile_data = await ai_agent.analyze_user_conversation(conversation_text, "unknown")
-                   result += f"• **Profile Elements Found**: {profile_data.name}, {profile_data.location}, {len(profile_data.skills)} skills\n"
-               except:
-                   pass
-               
-               # Try search analysis
-               try:
-                   search_criteria = await ai_agent.analyze_job_search_query(conversation_text)
-                   result += f"• **Search Intent**: Looking for {', '.join(search_criteria.job_types)} in {search_criteria.location}\n"
-               except:
-                   pass
-               
-           else:
-               result += f"• **Topic**: General conversation (no specific job intent detected)\n"
-       
-       result += f"\n💡 **Suggested Actions**:\n"
-       if analysis_type == "profile":
-           result += f"• Use `create_user_profile` tool to create structured profile\n"
-       elif analysis_type == "job_search":
-           result += f"• Use `intelligent_job_search` tool to find matching jobs\n"
-       elif analysis_type == "job_posting":
-           result += f"• Use `post_job_intelligently` tool to create job listing\n"
-       else:
-           result += f"• Specify analysis_type for more detailed insights\n"
-           result += f"• Available types: profile, job_search, job_posting\n"
-       
-       return result
-       
-   except Exception as e:
-       raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Conversation analysis failed: {str(e)}"))
+    """AI-powered matchmaking between job seekers and employers across languages"""
+    
+    if user_profile_id not in USERS:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="User profile not found"))
+    
+    try:
+        user_profile = USERS[user_profile_id].profile_data
+        
+        # Use AI to analyze compatibility
+        if ai_agent.client:
+            try:
+                matchmaking_prompt = f"""Analyze compatibility between job seeker and employer requirements:
 
+JOB SEEKER PROFILE:
+- Name: {user_profile.name}
+- Location: {user_profile.location}
+- Skills: {', '.join(user_profile.skills)}
+- Experience: {user_profile.experience_years} years
+- Availability: {user_profile.availability}
+- Salary expectation: ₹{user_profile.salary_expectation_min}-{user_profile.salary_expectation_max}
+- Languages: {user_profile.preferred_language}, {', '.join(user_profile.secondary_languages)}
+- Immediate need: {user_profile.immediate_need}
+
+EMPLOYER REQUIREMENTS (in {SUPPORTED_LANGUAGES.get(employer_language, employer_language)}):
+{employer_requirements}
+
+Provide detailed match analysis, potential concerns, and recommendations for both parties."""
+
+                completion = ai_agent.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are an expert job matchmaker for Indian workers and employers."},
+                        {"role": "user", "content": matchmaking_prompt}
+                    ]
+                )
+                
+                ai_analysis = completion.choices[0].message.content
+                
+            except Exception as e:
+                print(f"AI matchmaking error: {e}")
+                ai_analysis = "Basic compatibility analysis available."
+        else:
+            ai_analysis = "AI analysis not available - showing basic profile match."
+        
+        # Generate response in employer's language
+        if employer_language == "hi":
+            result = f"🤝 **Job Seeker - Employer Matchmaking**\n\n"
+            result += f"👤 **उम्मीदवार की जानकारी**:\n"
+            result += f"• नाम: {user_profile.name}\n"
+            result += f"• स्थान: {user_profile.location}\n"
+            result += f"• कौशल: {', '.join(user_profile.skills)}\n"
+            result += f"• अनुभव: {user_profile.experience_years} साल\n"
+            result += f"• उपलब्धता: {user_profile.availability}\n"
+            result += f"• वेतन अपेक्षा: ₹{user_profile.salary_expectation_min or 'फ्लेक्सिबल'} - ₹{user_profile.salary_expectation_max or 'बातचीत के बाद'}\n"
+            
+            if user_profile.immediate_need:
+                result += f"🚨 **तुरंत काम चाहिए**\n"
+                
+            result += f"\n💼 **आपकी जरूरतें**: {employer_requirements}\n\n"
+            result += f"🤖 **AI विश्लेषण**: {ai_analysis}\n\n"
+            result += f"📱 **संपर्क**: इस उम्मीदवार से बात करने के लिए, उनका फोन नंबर: {USERS[user_profile_id].phone}"
+        else:
+            result = f"🤝 **Job Seeker - Employer Matchmaking**\n\n"
+            result += f"👤 **Candidate Information**:\n"
+            result += f"• Name: {user_profile.name}\n"
+            result += f"• Location: {user_profile.location}\n"
+            result += f"• Skills: {', '.join(user_profile.skills)}\n"
+            result += f"• Experience: {user_profile.experience_years} years\n"
+            result += f"• Availability: {user_profile.availability}\n"
+            result += f"• Salary expectation: ₹{user_profile.salary_expectation_min or 'Flexible'} - ₹{user_profile.salary_expectation_max or 'Negotiable'}\n"
+            
+            if user_profile.immediate_need:
+                result += f"🚨 **Needs work immediately**\n"
+                
+            result += f"\n💼 **Your requirements**: {employer_requirements}\n\n"
+            result += f"🤖 **AI Analysis**: {ai_analysis}\n\n"
+            result += f"📱 **Contact**: To speak with this candidate, their phone: {USERS[user_profile_id].phone}"
+        
+        return result
+        
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Matchmaking failed: {str(e)}"))
+
+@mcp.tool
+async def get_job_market_insights(
+    location: Annotated[str, Field(description="City or area name")],
+    job_category: Annotated[str, Field(description="Type of job (security, delivery, cleaning, etc.)")] = "general",
+    language: Annotated[str, Field(description="Response language preference")] = "hi"
+) -> str:
+    """Get real-time job market insights and salary trends for specific location and job type"""
+    
+    try:
+        # Analyze current job market from our data
+        location_jobs = []
+        category_jobs = []
+        
+        for job in JOBS.values():
+            posting = job.posting_data
+            
+            if location.lower() in posting.location.lower():
+                location_jobs.append(posting)
+            
+            if job_category.lower() in posting.category.lower() or job_category == "general":
+                category_jobs.append(posting)
+        
+        # Calculate insights
+        if location_jobs:
+            avg_salary = sum(job.salary_max for job in location_jobs) // len(location_jobs)
+            min_salary = min(job.salary_min for job in location_jobs)
+            max_salary = max(job.salary_max for job in location_jobs)
+            urgent_jobs = len([job for job in location_jobs if job.urgency in ["immediate", "today"]])
+        else:
+            avg_salary, min_salary, max_salary, urgent_jobs = 18000, 12000, 25000, 0
+        
+        # Generate insights using AI if available
+        if ai_agent.client:
+            try:
+                insights_prompt = f"""Provide job market insights for {job_category} jobs in {location}, India.
+                
+                Current data:
+                - Available jobs: {len(location_jobs)}
+                - Average salary: ₹{avg_salary}
+                - Salary range: ₹{min_salary} - ₹{max_salary}
+                - Urgent openings: {urgent_jobs}
+                
+                Provide insights in {SUPPORTED_LANGUAGES.get(language, language)} about:
+                1. Market demand
+                2. Salary trends
+                3. Best opportunities
+                4. Tips for job seekers
+                5. Future outlook"""
+                
+                completion = ai_agent.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a job market analyst for Indian blue-collar workers."},
+                        {"role": "user", "content": insights_prompt}
+                    ]
+                )
+                
+                ai_insights = completion.choices[0].message.content
+                
+            except Exception as e:
+                print(f"AI insights error: {e}")
+                ai_insights = "Market analysis in progress..."
+        else:
+            ai_insights = "Basic market data available."
+        
+        # Format response based on language
+        if language == "hi":
+            result = f"📊 **{location} में {job_category} जॉब मार्केट इनसाइट्स**\n\n"
+            result += f"📈 **बाजार की स्थिति**:\n"
+            result += f"• उपलब्ध नौकरियां: {len(location_jobs)}\n"
+            result += f"• औसत वेतन: ₹{avg_salary:,}/महीना\n"
+            result += f"• वेतन रेंज: ₹{min_salary:,} - ₹{max_salary:,}\n"
+            result += f"• तुरंत भर्ती: {urgent_jobs} पोजीशन\n\n"
+            result += f"🤖 **AI विश्लेषण**:\n{ai_insights}\n\n"
+            result += f"💡 **सुझाव**:\n"
+            if urgent_jobs > 0:
+                result += f"• {urgent_jobs} तुरंत नौकरियां उपलब्ध - जल्दी अप्लाई करें\n"
+            result += f"• औसत वेतन से {10 if avg_salary > 20000 else 5}% ज्यादा मांगें\n"
+            result += f"• स्किल डेवलपमेंट पर फोकस करें"
+        else:
+            result = f"📊 **Job Market Insights for {job_category} in {location}**\n\n"
+            result += f"📈 **Market Overview**:\n"
+            result += f"• Available jobs: {len(location_jobs)}\n"
+            result += f"• Average salary: ₹{avg_salary:,}/month\n"
+            result += f"• Salary range: ₹{min_salary:,} - ₹{max_salary:,}\n"
+            result += f"• Immediate openings: {urgent_jobs} positions\n\n"
+            result += f"🤖 **AI Analysis**:\n{ai_insights}\n\n"
+            result += f"💡 **Recommendations**:\n"
+            if urgent_jobs > 0:
+                result += f"• {urgent_jobs} urgent jobs available - apply quickly\n"
+            result += f"• Negotiate {10 if avg_salary > 20000 else 5}% above average salary\n"
+            result += f"• Focus on skill development"
+        
+        return result
+        
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Market insights failed: {str(e)}"))
+
+# Custom routes for health checks and information
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:
-    """Health check endpoint for load balancers and monitoring"""
+    """Enhanced health check with system status"""
     return JSONResponse({
         "status": "healthy",
-        "service": "JobKranti MCP Server",
-        "version": "1.0.0",
+        "service": "JobKranti AI - Voice-First Multilingual Job Platform",
+        "version": "2.0.0",
         "port": 8086,
-        "tools_available": 7,
-        "ai_enabled": bool(OPENAI_API_KEY)
+        "features": {
+            "voice_processing": bool(OPENAI_API_KEY),
+            "multilingual_support": True,
+            "ai_powered": bool(OPENAI_API_KEY),
+            "supported_languages": list(SUPPORTED_LANGUAGES.keys()),
+            "tools_available": 8
+        },
+        "stats": {
+            "total_users": len(USERS),
+            "total_jobs": len(JOBS),
+            "active_conversations": len(CONVERSATIONS),
+            "supported_languages": len(SUPPORTED_LANGUAGES)
+        }
     })
 
 @mcp.custom_route("/", methods=["GET"])
 async def root_endpoint(request: Request) -> JSONResponse:
-    """Root endpoint with server information"""
+    """Enhanced root endpoint with comprehensive information"""
     return JSONResponse({
-        "service": "JobKranti AI - Intelligent Job Platform for Bharat",
+        "service": "JobKranti AI - Voice-First Multilingual Job Platform for Bharat",
         "status": "running",
-        "mcp_endpoint": "/mcp",  # Updated from /sse to /mcp
+        "description": "Advanced AI-powered job marketplace with voice support for India's blue-collar workforce",
+        "mcp_endpoint": "/mcp",
         "health_endpoint": "/health",
         "auth_required": True,
         "transport": "streamable-http",
+        "features": {
+            "voice_transcription": "OpenAI Whisper",
+            "voice_synthesis": "OpenAI TTS", 
+            "multilingual_ai": "GPT-4o with Indian languages",
+            "conversation_flow": "Intelligent follow-ups",
+            "emergency_job_finder": "Survival mode job search",
+            "ai_matchmaking": "Smart candidate-employer matching"
+        },
+        "supported_languages": SUPPORTED_LANGUAGES,
         "tools": [
-            "validate",
-            "create_user_profile", 
-            "intelligent_job_search",
-            "post_job_intelligently",
-            "generate_smart_resume",
-            "ai_job_safety_analysis",
-            "ai_conversation_analyzer"
+            {
+                "name": "process_voice_message",
+                "description": "Process WhatsApp voice messages with transcription and voice response"
+            },
+            {
+                "name": "create_profile_conversationally", 
+                "description": "Create user profiles from natural conversation"
+            },
+            {
+                "name": "smart_job_search",
+                "description": "AI-powered job search with voice support"
+            },
+            {
+                "name": "post_job_with_ai",
+                "description": "Post jobs using natural language parsing"
+            },
+            {
+                "name": "conversational_job_assistant",
+                "description": "Intelligent job-related conversations with follow-ups"
+            },
+            {
+                "name": "emergency_job_finder",
+                "description": "Urgent job search for survival situations"
+            },
+            {
+                "name": "multilingual_job_matchmaker",
+                "description": "AI-powered candidate-employer matching"
+            },
+            {
+                "name": "get_job_market_insights",
+                "description": "Real-time job market analysis and trends"
+            }
         ]
     })
 
-@mcp.custom_route("/info", methods=["GET"])
-async def info_endpoint(request: Request) -> PlainTextResponse:
-    """Simple text endpoint for basic checks"""
-    return PlainTextResponse("JobKranti MCP Server is running! Ready for PuchAI connection.")
+@mcp.custom_route("/demo", methods=["GET"])
+async def demo_endpoint(request: Request) -> JSONResponse:
+    """Demo data and examples for testing"""
+    return JSONResponse({
+        "demo_conversations": {
+            "job_seeker_hindi": "नमस्ते, मुझे काम चाहिए। मैं राहुल हूं, दिल्ली में रहता हूं। Security guard का काम करता था 3 साल। अच्छी salary चाहिए।",
+            "job_seeker_english": "Hi, I need a job urgently. I'm Priya from Mumbai. I can do cleaning work, cooking also. Have 2 years experience.",
+            "employer_hindi": "मुझे एक delivery boy चाहिए Mumbai में। रोज 1000 rupees दूंगा। Own bike होना चाहिए। तुरंत join करना है।",
+            "emergency_request": "भाई, मुझे आज ही कोई काम चाहिए। घर में खाना नहीं है। कोई भी काम करूंगा।"
+        },
+        "sample_voice_scenarios": [
+            "WhatsApp voice message asking for maid work in Hindi",
+            "Tamil voice message from construction worker",
+            "Emergency Bengali voice message needing immediate work",
+            "Employer voice message posting delivery job in Hinglish"
+        ],
+        "demo_jobs": len(JOBS),
+        "languages_supported": len(SUPPORTED_LANGUAGES)
+    })
 
 async def main():
-    print("🚀 Starting JobKranti AI-Powered MCP server on http://0.0.0.0:8086")
-    print("🤖 AI Agent initialized with intelligent conversation analysis")
-    print("🔗 Connect from PuchAI using your auth token")
-    print("📱 Demo data loaded with sample job postings")
-    print("🌐 Custom routes available: /health, /, /info")
-    print("🔗 MCP endpoint available at: /mcp")  # Updated info
+    print("🚀 Starting JobKranti AI-Powered Voice-First Multilingual MCP Server")
+    print("🎤 Voice Processing: OpenAI Whisper (Transcription) + TTS (Voice Response)")
+    print("🧠 AI Engine: GPT-4o with advanced Indian language support")
+    print("🌍 Languages: 13 Indian languages + English")
+    print("💼 Focus: Blue-collar, gig workers, emergency job needs")
+    print("📱 Integration: WhatsApp voice messages, PuchAI ready")
+    print("🔗 Server: http://0.0.0.0:8086")
+    print("🔗 MCP Endpoint: /mcp")
+    print("🩺 Health Check: /health")
+    print("🎮 Demo: /demo")
     
     if OPENAI_API_KEY:
-        print("✅ OpenAI API connected - Advanced AI features enabled")
+        print("✅ OpenAI API connected - Full AI features enabled")
+        print("   • Voice transcription (Whisper)")
+        print("   • Voice synthesis (TTS)")
+        print("   • Multilingual conversations (GPT-4o)")
+        print("   • Intelligent matching and insights")
     else:
-        print("⚠️  OpenAI API not configured - Using fallback rule-based processing")
+        print("⚠️  OpenAI API not configured - Fallback mode")
+    
+    print(f"📊 Demo Data: {len(JOBS)} sample jobs loaded")
+    print("🏆 Ready for PuchAI Hackathon 2025!")
     
     # Use the correct transport with default path
     await mcp.run_async(transport="http", host="0.0.0.0", port=8086)
-    # This automatically creates the /mcp endpoint
 
 if __name__ == "__main__":
     asyncio.run(main())
