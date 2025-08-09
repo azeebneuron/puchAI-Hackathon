@@ -30,6 +30,8 @@ In the WhatsApp chat with PuchAI, send:
 /mcp connect https://your-ngrok-url.ngrok.app/mcp/ eec2bce1df69ee13b83ab559a17bf584628193682b8a102f73ce85d4a3a9f2
 ```
 
+Btw above are sample auth key, not the actual one
+
 **Example:**
 ```
 /mcp connect https://abc123.ngrok.app/mcp/ eec2bce1df69ee13b83ab559a17bf584628193682b8a102f73ce85d4a3a9f2
