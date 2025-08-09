@@ -1,0 +1,17 @@
+[project]
+name = "puchai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.13.4",
+    "fastmcp>=2.11.2",
+    "httpx>=0.28.1",
+    "markdownify>=1.1.0",
+    "openai>=1.99.6",
+    "pillow>=11.3.0",
+    "pydantic>=2.11.7",
+    "python-dotenv>=1.1.1",
+    "readabilipy>=0.3.0",
+]
