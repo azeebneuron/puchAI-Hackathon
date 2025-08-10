@@ -1,90 +1,217 @@
-### Let's Fuckinggg Gooo Guys
+# JobKranti AI - Voice-First Multilingual Job Platform on WhatsApp
 
-Check the environment variables in whatsapp
+> **India's First Voice-First, AI-Powered Job Marketplace for Blue-Collar Workers**
+
+JobKranti AI bridges the employment gap in India by connecting blue-collar workers with employers through voice-powered, multilingual AI assistance. Built for the PuchAI Hackathon 2025, it addresses the critical need for accessible job matching in India's diverse linguistic landscape.
+
+## **The Problem We Solve**
+
+- **450M+ blue-collar workers** in India struggle to find jobs due to language barriers
+- **Employers** can't find reliable domestic help (maids, drivers, security guards)
+- **Technology gap** - most job platforms are text-based and English-only
+- **Emergency situations** - people need immediate work for survival but don't know where to look
+
+## **Our Solution**
+
+### **Voice-First Design**
+- **WhatsApp voice messages** in 13+ Indian languages
+- **Real-time transcription** using OpenAI Whisper
+- **Voice responses** with culturally appropriate AI voices
+- **No reading required** - perfect for users with limited literacy
+
+### **AI-Powered Matching**
+- **GPT-4o understands colloquial** job descriptions in local languages
+- **Smart intent recognition** - knows when someone desperately needs work vs. casual browsing
+- **Emergency job finder** - provides immediate survival options
+- **Context-aware responses** - understands family situations and urgency
+
+### **Multilingual Support**
+- Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, Urdu, Odia, Assamese, English
+- **Code-mixing support** - understands Hinglish and other mixed languages
+- **Regional job categories** - Mumbai finance support, Bangalore tech assistance, Delhi security
+
+## **Technical Architecture**
+
+### **MCP Server Integration**
+```
+PuchAI ↔ JobKranti MCP Server ↔ OpenAI GPT-4o ↔ Database
+                ↕
+         Voice Processing (Whisper + TTS)
+```
+
+### **Core Components**
+- **FastMCP Server** - Model Context Protocol integration for PuchAI
+- **OpenAI Integration** - GPT-4o for intelligence, Whisper for voice, TTS for responses
+- **SQLite + Cache** - Persistent storage with in-memory performance
+- **Pydantic Models** - Structured data extraction from natural language
+- **Bearer Authentication** - Secure API access
+
+### **Key Features**
+- **Voice Message Processing** - WhatsApp voice → text → AI response → voice
+- **Smart Job Matching** - AI understands "maid chahiye" vs "koi bhi kaam chahiye"
+- **Emergency Options** - Immediate survival job recommendations
+- **Real-time Analytics** - Track user engagement and successful matches
+- **Secure** - Bearer token authentication with rate limiting
+
+## **Quick Start**
+
+### **Prerequisites**
+- Python 3.11+
+- OpenAI API key
+- WhatsApp number for validation
+
+### **Installation**
+```bash
+# Clone repository
+git clone <repo_name>
+cd <repo_name>
 
 uv run main.py
 
-# Test with your auth token
-curl -H "Authorization: Bearer your_auth_token_here" http://localhost:8086/mcp/
-
-# Test POST request with auth
-curl -X POST http://localhost:8086/mcp/ \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer demo_token_hackathon_2025" \
-  -d '{"jsonrpc": "2.0", "method": "initialize", "id": 1}'
-
-  --- 
-
-  Yes, exactly! You test directly in **PuchAI's WhatsApp chat**! 📱
-
-## 📱 **How to Connect & Test in WhatsApp**
-
-### **Step 1: Open PuchAI WhatsApp**
-- Go to: https://wa.me/+919998881729
-- Or scan QR code if available
-- Start a WhatsApp conversation with PuchAI
-
-### **Step 2: Connect Your MCP Server**
-In the WhatsApp chat with PuchAI, send:
-```
-/mcp connect https://your-ngrok-url.ngrok.app/mcp/ eec2bce1df69ee13b83ab559a17bf584628193682b8a102f73ce85d4a3a9f2
+# Setup environment
+cp .env.example .env
+# Edit .env with your credentials
 ```
 
-Btw above are sample auth key, not the actual one
+### **Environment Variables**
+```env
+# Required
+AUTH_TOKEN=your_secret_bearer_token_here
+MY_NUMBER=919998881729  # Your WhatsApp number (country_code + number)
+OPENAI_API_KEY=sk-your-openai-api-key-here
 
-**Example:**
-```
-/mcp connect https://abc123.ngrok.app/mcp/ eec2bce1df69ee13b83ab559a17bf584628193682b8a102f73ce85d4a3a9f2
-```
-
-### **Step 3: Test Your Tools**
-Once connected, you can test your JobKranti tools directly in WhatsApp:
-
-#### **🧪 Test Profile Creation:**
-```
-Create my profile: My name is Ravi Kumar, I live in Gurgaon Sector 15, I have 3 years security guard experience, and I can also drive. I prefer night shifts.
-
-Phone: 9876543210
+# Optional
+DATABASE_URL=sqlite:///jobkranti.db
+LOG_LEVEL=INFO
 ```
 
-#### **🧪 Test Job Search:**
-```
-I need a security guard job in Delhi or Gurgaon with at least 18000 salary
-```
-
-#### **🧪 Test Job Posting:**
-```
-Post this job: Need reliable house cleaning person in Dwarka, Delhi. 2 hours daily, 8000 per month. Contact 9123456789
+### **Run Server**
+```bash
+uv run main.py
 ```
 
-#### **🧪 Test Safety Analysis:**
+Server starts at: `http://localhost:8086`
+- Health check: `GET /health`
+- MCP endpoint: `POST /mcp/`
+
+## 🔧 **PuchAI Integration**
+
+### **Connect to PuchAI**
+```bash
+/mcp connect https://your-domain.com/mcp/ YOUR_AUTH_TOKEN
 ```
-Check if this job is safe: "Earn 50000 per month from home! Just pay 5000 registration fee. Call 9999999999"
+
+### **Available Tools**
+1. **`validate`** - Server validation (returns phone number)
+2. **`jobkranti_ai_assistant`** - Main AI assistant for all job needs
+3. **`process_voice_message`** - WhatsApp voice message processing
+4. **`emergency_survival_jobs`** - Urgent job options
+
+### **Example Usage in PuchAI**
+```
+User: "Maid chahiye Bangalore mein"
+AI: Uses jobkranti_ai_assistant → Creates job posting + shows available candidates
+
+User: "Koi bhi kaam chahiye, very urgent"
+AI: Uses emergency_survival_jobs → Provides immediate survival options
+
+User: [Voice message in Hindi]
+AI: Uses process_voice_message → Transcribes + responds with voice
 ```
 
-## 🎯 **Complete WhatsApp Demo Flow**
+## 🎯 **Core Use Cases**
 
-1. **Open WhatsApp** → Chat with +919998881729
-2. **Connect MCP** → `/mcp connect` command  
-3. **Test Tools** → Send natural language messages
-4. **See AI Magic** → JobKranti processes everything intelligently
-5. **Demo Success** → Show judges the power of AI + WhatsApp
+### **1. Employer Hiring**
+```
+Input: "Need maid for Koramangala, good salary"
+Output: Job posting created + matching candidates shown
+```
 
-## 📱 **Why WhatsApp is Perfect for Demo**
+### **2. Job Seeking**
+```
+Input: "Security guard job Delhi mein"
+Output: Available security jobs in Delhi with contact info
+```
 
-- ✅ **No App Download** - Works immediately
-- ✅ **Natural Language** - Just chat normally  
-- ✅ **AI Processing** - Your server handles complexity
-- ✅ **Real User Experience** - Exactly how users would use it
-- ✅ **Judge Impact** - They can see it working live
+### **3. Emergency Employment**
+```
+Input: "Koi bhi kaam chahiye, bachche bhookhe hain"
+Output: Immediate survival jobs (delivery, daily labor, etc.)
+```
 
-## 🚀 **Ready for Hackathon Demo**
+### **4. Voice Processing**
+```
+Input: [WhatsApp voice in Tamil]
+Output: Transcribed → AI response → Tamil voice reply
+```
 
-Your complete demo setup:
-1. **Your JobKranti MCP Server** ✅ Running & tested
-2. **ngrok tunnel** ✅ Public HTTPS access
-3. **PuchAI WhatsApp** ✅ Ready for connection
-4. **7 AI Tools** ✅ All working perfectly
+## **Demo Data**
 
-**This is exactly what judges want to see** - a working AI solution accessible through WhatsApp that solves real problems for Indian workers! 🏆
+The server includes realistic demo jobs:
+- **Maid** - Bangalore, Koramangala (₹12,000-15,000/month)
+- **Security Guard** - Delhi NCR (₹18,000-22,000/month)  
+- **Delivery Partner** - Mumbai, Andheri (₹25,000-35,000/month)
 
+## **API Documentation**
+
+### **Main AI Assistant**
+```python
+POST /mcp
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "jobkranti_ai_assistant",
+    "arguments": {
+      "user_message": "Driver job chahiye Mumbai mein",
+      "user_phone": "919876543210"
+    }
+  }
+}
+```
+
+### **Voice Processing**
+```python
+POST /mcp/
+{
+  "jsonrpc": "2.0", 
+  "method": "tools/call",
+  "params": {
+    "name": "process_voice_message",
+    "arguments": {
+      "audio_data_base64": "base64_encoded_audio_data",
+      "user_phone": "919876543210",
+      "language_hint": "hi"
+    }
+  }
+}
+```
+
+## **Architecture Decisions**
+
+### **Why Voice-First?**
+- **Accessibility** - Many blue-collar workers have limited literacy
+- **Convenience** - Voice is faster than typing on mobile
+- **Cultural fit** - Voice communication is preferred in Indian context
+
+### **Why MCP + PuchAI?**
+- **Rapid deployment** - MCP protocol enables quick integration
+- **WhatsApp integration** - Leverages PuchAI's WhatsApp connectivity
+- **Scalability** - MCP servers can handle multiple clients
+
+### **Why SQLite + Cache?**
+- **Simplicity** - Easy deployment without complex database setup
+- **Performance** - In-memory cache for fast responses
+- **Persistence** - Data survives server restarts
+
+## **Contact & Support**
+
+- **Demo Server**: `https://puchaimcp.chagadiye.xyz`
+- **Health Check**: `https://puchaimcp.chagadiye.xyz/health`
+
+
+**🇮🇳 Built with ❤️ for Bharat's Workforce**
+
+*"Every voice message could change a life. Every job match could feed a family."*
+
+**#BuildWithPuch #VoiceAI #JobKranti #India #Hackathon2025**
