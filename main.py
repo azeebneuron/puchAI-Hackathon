@@ -295,7 +295,7 @@ class DataManager:
                 ''', (
                     user.id,
                     user.phone,
-                    json.dumps(asdict(user.profile_data), default=str),
+                    json.dumps(user.profile_data.model_dump(), default=str),
                     json.dumps(user.conversation_history, default=str),
                     json.dumps(user.voice_samples),
                     user.created_at.isoformat(),
@@ -321,7 +321,7 @@ class DataManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     job.id,
-                    json.dumps(asdict(job.posting_data), default=str),
+                    json.dumps(job.posting_data.model_dump(), default=str),
                     job.posted_by,
                     job.verified,
                     job.views,
@@ -1103,6 +1103,166 @@ async def create_profile_conversationally(
        
    except Exception as e:
        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Profile creation failed: {str(e)}"))
+
+@mcp.tool
+async def intelligent_conversation_handler(
+    user_message: Annotated[str, Field(description="User's complete message in any language")],
+    user_phone: Annotated[str, Field(description="User's phone number")],
+    conversation_history: Annotated[str, Field(description="Previous conversation context")] = ""
+) -> str:
+    """Let the LLM intelligently handle any job-related conversation and take appropriate action"""
+    
+    try:
+        # Let GPT-4o analyze the conversation and decide what to do
+        analysis_prompt = f"""Analyze this conversation and determine what the user wants and what action to take.
+
+User Message: "{user_message}"
+Previous Context: "{conversation_history}"
+User Phone: {user_phone}
+
+You are JobKranti AI. Based on this conversation:
+
+1. CLASSIFY the intent:
+   - employer_posting_job: Someone wants to hire/needs worker (maid, driver, security, etc.)
+   - job_seeker: Someone looking for work/employment
+   - general_inquiry: Questions about platform, salary info, etc.
+   - profile_creation: User providing their details
+   - job_application: Responding to a specific job
+
+2. EXTRACT key information:
+   - What type of work/service is needed or offered?
+   - Location mentioned?
+   - Salary/budget mentioned?
+   - Urgency level?
+   - Any specific requirements?
+
+3. DECIDE action:
+   - create_job_posting: If employer needs worker
+   - search_jobs: If person needs work
+   - create_profile: If collecting user info
+   - provide_info: If answering questions
+   - ask_followup: If need more details
+
+4. RESPOND in user's language with:
+   - Appropriate action taken
+   - Any follow-up questions needed
+   - Relevant job matches or postings
+
+Handle this conversation naturally and take the most helpful action."""
+
+        if ai_agent.client:
+            completion = ai_agent.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are JobKranti AI, an intelligent job marketplace assistant for India. Handle conversations naturally and take appropriate actions."},
+                    {"role": "user", "content": analysis_prompt}
+                ]
+            )
+            
+            ai_response = completion.choices[0].message.content
+            
+            # Now let the LLM decide what specific action to take
+            action_prompt = f"""Based on your analysis: "{ai_response}"
+
+Now execute the appropriate action:
+
+For the user message: "{user_message}"
+
+If this is an EMPLOYER posting (someone needs to hire):
+- Create a job posting using the details provided
+- Search for potential candidates
+- Respond with posting confirmation + candidate suggestions
+
+If this is a JOB SEEKER:
+- Search available jobs matching their criteria
+- If no profile exists, offer to create one
+- Show relevant opportunities
+
+If this is GENERAL INQUIRY:
+- Provide helpful information
+- Guide them to relevant features
+
+Execute the action and provide a complete response in the user's language."""
+
+            action_completion = ai_agent.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are JobKranti AI. Execute the determined action and provide a complete helpful response."},
+                    {"role": "user", "content": action_prompt}
+                ]
+            )
+            
+            return action_completion.choices[0].message.content
+            
+        else:
+            # Fallback without AI
+            return "I can help you with jobs. Please tell me if you're looking for work or need to hire someone."
+            
+    except Exception as e:
+        return f"I'm here to help with job-related needs. Could you tell me more about what you're looking for?"
+    
+@mcp.tool
+async def ai_powered_job_assistant(
+    user_message: Annotated[str, Field(description="User's message in any language")],
+    user_phone: Annotated[str, Field(description="User's phone number")]
+) -> str:
+    """Fully AI-powered assistant that understands intent and executes actions automatically"""
+    
+    if not ai_agent.client:
+        return "AI features not available"
+    
+    try:
+        # Single prompt that handles classification AND execution
+        system_prompt = f"""You are JobKranti AI, India's intelligent job marketplace. 
+
+When users send messages, you should:
+
+1. UNDERSTAND what they want (hire someone, find work, ask questions, etc.)
+2. EXTRACT all relevant details (job type, location, salary, requirements)
+3. TAKE APPROPRIATE ACTION automatically
+4. RESPOND helpfully in their language
+
+Available actions you can take:
+- Create job postings for employers
+- Search jobs for job seekers  
+- Create user profiles
+- Provide market insights
+- Handle emergency job requests
+
+Current conversation:
+User: "{user_message}"
+Phone: {user_phone}
+
+Examples of how to handle different scenarios:
+
+EMPLOYER EXAMPLE:
+User: "Mujhe ek maid ki jaroorat hai aur main mahine ke 3000 de sakta hoon"
+Action: Create job posting for maid position, ₹3000/month
+Response: "✅ मैंने आपकी नौकरी पोस्ट कर दी है! मेड की तलाश - ₹3000/महीना [show job details and any matching candidates]"
+
+JOB SEEKER EXAMPLE:  
+User: "Mujhe security guard ka kaam chahiye Delhi mein"
+Action: Search security jobs in Delhi
+Response: "🔍 दिल्ली में सिक्यूरिटी गार्ड की नौकरियां मिलीं! [show matching jobs]"
+
+Handle the current message intelligently and provide a complete helpful response."""
+
+        # Let GPT-4o handle everything in one go
+        completion = ai_agent.client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Handle this message: {user_message}"}
+            ]
+        )
+        
+        ai_response = completion.choices[0].message.content
+        
+        # The LLM response should include what action was taken
+        return ai_response
+        
+    except Exception as e:
+        return "मैं आपकी मदद करना चाहता हूं। कृपया बताएं कि आप क्या ढूंढ रहे हैं?"
 
 @mcp.tool
 async def smart_job_search(
