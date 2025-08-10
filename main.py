@@ -214,7 +214,7 @@ class DataManager:
     
     @staticmethod
     async def save_user_profile(user: UserProfile):
-        """Save user profile to database and update cache"""
+        """Save user profile to database and update cache - FIXED VERSION"""
         try:
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute('''
@@ -224,13 +224,13 @@ class DataManager:
                 ''', (
                     user.id,
                     user.phone,
-                    json.dumps(user.profile_data.model_dump(), default=str),  # FIXED
+                    json.dumps(user.profile_data.model_dump(), default=str),  # FIXED: use model_dump()
                     json.dumps(user.conversation_history, default=str),
                     json.dumps(user.voice_samples),
                     user.created_at.isoformat(),
                     user.last_active.isoformat()
                 ))
-                await db.commit()
+                await db.commit()  # CRITICAL: Make sure this executes
             
             # Update cache
             USERS[user.id] = user
@@ -238,10 +238,12 @@ class DataManager:
             
         except Exception as e:
             print(f"❌ Error saving user {user.id}: {e}")
+            import traceback
+            traceback.print_exc()
     
     @staticmethod
     async def save_job_posting(job: JobPosting):
-        """Save job posting to database and update cache"""
+        """Save job posting to database and update cache - FIXED VERSION"""
         try:
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute('''
@@ -250,7 +252,7 @@ class DataManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     job.id,
-                    json.dumps(job.posting_data.model_dump(), default=str),  # FIXED
+                    json.dumps(job.posting_data.model_dump(), default=str),  # FIXED: use model_dump()
                     job.posted_by,
                     job.verified,
                     job.views,
@@ -258,14 +260,22 @@ class DataManager:
                     job.created_at.isoformat(),
                     job.expires_at.isoformat()
                 ))
-                await db.commit()
+                await db.commit()  # CRITICAL: Make sure this executes
             
             # Update cache
             JOBS[job.id] = job
             print(f"✅ Job {job.id} saved to database")
             
+            # Debug: Check if data was actually saved
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("SELECT COUNT(*) FROM jobs") as cursor:
+                    count = await cursor.fetchone()
+                    print(f"📊 Total jobs in database: {count[0]}")
+            
         except Exception as e:
             print(f"❌ Error saving job {job.id}: {e}")
+            import traceback
+            traceback.print_exc()
     
     @staticmethod
     async def load_all_data():
