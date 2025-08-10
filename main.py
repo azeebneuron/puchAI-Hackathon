@@ -828,7 +828,7 @@ Take appropriate action and provide complete helpful response."""
 @mcp.tool
 async def validate() -> str:
    """Validate JobKranti AI server for PuchAI integration"""
-   return f"{MY_NUMBER} - JobKranti AI ready! India's smart job marketplace for maids, drivers, security, delivery workers"
+   return MY_NUMBER 
 
 @mcp.tool
 async def process_voice_message(
