@@ -836,48 +836,58 @@ async def jobkranti_assistant(
         return "JobKranti AI ready! What job-related help do you need?"
     
     try:
-        # 🧠 AI analysis
+        # 🧠 IMPROVED AI analysis with better prompts
         response = ai_agent.client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
                     "role": "system",
-                    "content": f"""You are JobKranti AI. Analyze user intent:
+                    "content": f"""You are JobKranti AI intent classifier. Analyze user intent CAREFULLY:
 
 CURRENT JOBS: {len(JOBS)} jobs in database
 
-USER INTENTS:
-1. POST_JOB - Wants to hire (मुझे चाहिए, need worker, post job)
-2. FIND_JOBS - Looking for work (नौकरी चाहिए, job needed)  
-3. SHOW_ALL - Show all jobs (सभी नौकरी, all jobs, show jobs)
+INTENT CLASSIFICATION RULES:
+1. POST_JOB (Employer hiring): 
+   - "मुझे मेड चाहिए" (I NEED a maid)
+   - "Need security guard"
+   - "Looking to hire driver"
+   - Keywords: चाहिए, need, require, hire, looking for (worker)
 
-For POST_JOB: Say "CREATE_JOB" if you have title, location, contact
-For FIND_JOBS: Say "SEARCH_JOBS" 
-For SHOW_ALL: Say "SHOW_ALL_JOBS"
+2. FIND_JOBS (Worker seeking): 
+   - "मुझे काम चाहिए" (I NEED work)
+   - "मुझे मेड का काम चाहिए" (I need maid WORK)
+   - "Looking for job"
+   - Keywords: काम चाहिए, job chahiye, work needed, seeking employment
 
-Be brief and clear about intent."""
+3. SHOW_ALL: "सभी नौकरी", "all jobs", "show jobs"
+
+CRITICAL: 
+- "मुझे मेड का काम चाहिए" = FIND_JOBS (seeking maid work)
+- "मुझे मेड चाहिए" = POST_JOB (need to hire maid)
+
+Respond ONLY with: CREATE_JOB, SEARCH_JOBS, or SHOW_ALL_JOBS"""
                 },
                 {
                     "role": "user",
                     "content": f"User said: '{user_message}'"
                 }
             ],
-            max_tokens=200,
-            temperature=0.1
+            max_tokens=50,
+            temperature=0
         )
         
-        ai_response = response.choices[0].message.content
-        print(f"🧠 AI Response: {ai_response}")  # Debug log
+        ai_response = response.choices[0].message.content.strip()
+        print(f"🧠 AI Intent: {ai_response}")  # Debug log
         
-        # 🎯 Check for specific intents
-        if "CREATE_JOB" in ai_response or ("post" in ai_response.lower() and "job" in ai_response.lower()):
-            print("🔧 Attempting to create job...")  # Debug
+        # 🎯 IMPROVED Intent handling
+        if "CREATE_JOB" in ai_response:
+            print("🔧 Creating job posting...")
             
             # Extract job details using AI
             job_data = await ai_agent.extract_job_details(user_message, user_phone)
-            print(f"📝 Extracted job data: {job_data.title}, {job_data.location}, {job_data.contact_info}")  # Debug
+            print(f"📝 Extracted: {job_data.title}, {job_data.location}, {job_data.contact_info}")
             
-            # Validate we have essential info
+            # Validate essential info before creating
             if (job_data.title and job_data.title != "General Worker" and 
                 job_data.location and job_data.location != "Location not specified" and 
                 job_data.contact_info and job_data.contact_info != "Contact for details"):
@@ -886,7 +896,7 @@ Be brief and clear about intent."""
                 max_id = max((int(j.id[1:]) for j in JOBS.values() if j.id.startswith('J') and j.id[1:].isdigit()), default=0)
                 job_id = f"J{max_id + 1:03d}"
                 management_key = str(uuid4())
-                print(f"🆔 Creating job {job_id}")  # Debug
+                print(f"🆔 Creating job {job_id}")
                 
                 # Create job object
                 job = JobPosting(
@@ -899,9 +909,9 @@ Be brief and clear about intent."""
                 
                 # Save to database AND memory
                 await data_manager.save_job_posting(job)
-                print(f"💾 Job {job_id} saved! Total jobs now: {len(JOBS)}")  # Debug
+                print(f"💾 Job {job_id} saved! Total jobs: {len(JOBS)}")
                 
-                return f"""✅ **प्लंबर की नौकरी सफलतापूर्वक पोस्ट हो गई!**
+                return f"""✅ **नौकरी सफलतापूर्वक पोस्ट हो गई!**
 
 🆔 **Job ID:** {job_id}
 🏷️ **Title:** {job_data.title}
@@ -910,61 +920,119 @@ Be brief and clear about intent."""
 📱 **Contact:** {job_data.contact_info}
 
 🔑 **Management Key:** {management_key[:12]}...
-(Save this key for editing/deleting)
+(इसे save करें - edit/delete के लिए)
 
-🚀 Your job is now LIVE! Total jobs: {len(JOBS)}"""
+🚀 आपकी नौकरी अब LIVE है! Total jobs: {len(JOBS)}"""
             
             else:
-                return f"Job creation needs more info. Title: {job_data.title}, Location: {job_data.location}, Contact: {job_data.contact_info}"
+                return f"❌ Job posting के लिए अधिक जानकारी चाहिए। कृपया location और contact details दें।"
         
-        elif "SEARCH_JOBS" in ai_response or ("find" in ai_response.lower() or "search" in ai_response.lower()):
+        elif "SEARCH_JOBS" in ai_response:
             print("🔍 Searching for jobs...")
-            return await search_for_jobs(user_message)
+            return await search_for_jobs_fixed(user_message)
         
-        elif "SHOW_ALL_JOBS" in ai_response or ("show" in ai_response.lower() and "job" in ai_response.lower()):
+        elif "SHOW_ALL_JOBS" in ai_response:
             print("📋 Showing all jobs...")
             return await show_all_available_jobs()
         
-        # Default response
-        return ai_response
+        # Fallback - provide helpful response
+        return f"""🤔 **मैं समझ नहीं पाया।** 
+
+**क्या आप:**
+- **नौकरी पोस्ट करना चाहते हैं?** "मुझे मेड चाहिए"
+- **काम ढूंढ रहे हैं?** "मुझे मेड का काम चाहिए"  
+- **सभी jobs देखना चाहते हैं?** "सभी नौकरी दिखाओ"
+
+कृपया स्पष्ट रूप से बताएं।"""
         
     except Exception as e:
         print(f"❌ Error in jobkranti_assistant: {e}")
         return f"JobKranti AI में समस्या: {str(e)}"
 
-async def search_for_jobs(query: str) -> str:
-    """Search for jobs based on query"""
+
+# 2. FIXED Search Function
+async def search_for_jobs_fixed(query: str) -> str:
+    """IMPROVED job search with better keyword matching"""
     if not JOBS:
         return "❌ **कोई नौकरी उपलब्ध नहीं है।**"
     
     query_lower = query.lower()
     matching_jobs = []
     
-    print(f"🔍 Searching in {len(JOBS)} jobs for: {query}")  # Debug
+    print(f"🔍 Searching in {len(JOBS)} jobs for: {query}")
+    
+    # IMPROVED keyword extraction from query
+    job_keywords = {
+        'maid': ['maid', 'मेड', 'cleaning', 'safai', 'सफाई', 'housework', 'domestic'],
+        'security': ['security', 'guard', 'सिक्यूरिटी', 'गार्ड', 'watchman', 'chowkidar'],
+        'driver': ['driver', 'ड्राइवर', 'driving', 'गाड़ी', 'car', 'taxi'],
+        'delivery': ['delivery', 'डिलीवरी', 'courier', 'zomato', 'swiggy'],
+        'cook': ['cook', 'chef', 'रसोइया', 'खाना', 'cooking', 'kitchen'],
+        'construction': ['construction', 'निर्माण', 'labour', 'मजदूर', 'building'],
+        'plumber': ['plumber', 'प्लंबर', 'pipe', 'water', 'plumbing']
+    }
+    
+    # Find what type of job user is looking for
+    user_job_type = None
+    for job_type, keywords in job_keywords.items():
+        if any(keyword in query_lower for keyword in keywords):
+            user_job_type = job_type
+            break
+    
+    print(f"🎯 User looking for: {user_job_type}")
     
     for job_id, job in JOBS.items():
         if job.is_active:
             posting = job.posting_data
-            print(f"Checking job: {posting.title} category: {posting.category}")  # Debug
             
-            # Enhanced keyword matching for plumber
-            if (any(word in posting.title.lower() for word in ["plumber", "प्लंबर", "प्लम्बर"]) or
-                any(word in posting.category.lower() for word in ["plumb", "maintenance", "construction"]) or
-                any(word in posting.description.lower() for word in ["plumber", "प्लंबर", "pipe", "water"])):
+            # IMPROVED matching logic
+            is_match = False
+            
+            if user_job_type:
+                # Match by job type
+                if user_job_type == 'maid' and posting.category == 'cleaning':
+                    is_match = True
+                elif user_job_type == 'security' and posting.category == 'security':
+                    is_match = True
+                elif user_job_type == 'driver' and posting.category == 'driving':
+                    is_match = True
+                elif user_job_type == 'delivery' and posting.category == 'delivery':
+                    is_match = True
+                elif user_job_type == 'cook' and posting.category == 'cooking':
+                    is_match = True
+                elif user_job_type == 'construction' and posting.category == 'construction':
+                    is_match = True
+                elif user_job_type == 'plumber' and 'plumber' in posting.title.lower():
+                    is_match = True
+            else:
+                # No specific job type - show all (but this shouldn't happen with good AI)
+                is_match = True
+            
+            # Location matching (optional)
+            if 'bangalore' in query_lower or 'bengaluru' in query_lower:
+                if 'bangalore' not in posting.location.lower() and 'bengaluru' not in posting.location.lower():
+                    is_match = False
+            
+            if is_match:
                 matching_jobs.append((job_id, job))
-                print(f"✅ Found matching job: {job_id}")  # Debug
+                print(f"✅ Found matching job: {job_id} - {posting.title}")
     
     if not matching_jobs:
-        # Show ALL jobs for debugging
-        all_jobs_info = "\n".join([f"- {j.posting_data.title} ({j.posting_data.category})" for j in JOBS.values() if j.is_active])
-        return f"""❌ प्लंबर की कोई नौकरी नहीं मिली। 
+        return f"""❌ **{user_job_type or 'Requested'} की कोई नौकरी नहीं मिली।** 
 
-**उपलब्ध सभी jobs:**
-{all_jobs_info}
+**उपलब्ध job categories:**
+- Maid/Cleaning jobs
+- Security Guard jobs  
+- Driver jobs
+- Delivery jobs
+- Cook jobs
 
-कुल jobs: {len([j for j in JOBS.values() if j.is_active])}"""
+कुल active jobs: {len([j for j in JOBS.values() if j.is_active])}
+
+**Try:** "सभी नौकरी दिखाओ" to see all available jobs."""
     
-    result = f"🔍 **मिली {len(matching_jobs)} प्लंबर नौकरियां:**\n\n"
+    result = f"🔍 **मिली {len(matching_jobs)} {user_job_type or 'matching'} नौकरियां:**\n\n"
+    
     for i, (job_id, job) in enumerate(matching_jobs, 1):
         posting = job.posting_data
         result += f"""**{i}. {posting.title}**
