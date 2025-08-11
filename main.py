@@ -825,7 +825,7 @@ JOB_SCHEMA = {
     }
 }
 
-@mcp.tool(description="Smart JobKranti assistant for all job operations")
+@mcp.tool(description="You can post jobs or look for work just by speaking or typing, in any language you are comfortable with. Example:\"I need an electrician in Indiranagar, Bangalore, for ₹500/day.\" → AI extracts details & creates a job post. Later, someone says: \"Looking for electrician job in Indiranagar\" → AI instantly shows them your job. No apps, no forms, no stored phone numbers during pilot. Just jobs to people who need them. Made keeping tier 2/3 blue and grey collar workers in mind.")
 async def jobkranti_assistant(
     user_message: Annotated[str, Field(description="User's complete message in any language")],
     user_phone: Annotated[str, Field(description="User's phone number")] = "unknown"
